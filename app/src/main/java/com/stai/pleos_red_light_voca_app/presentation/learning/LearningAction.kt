@@ -2,6 +2,12 @@ package com.stai.pleos_red_light_voca_app.presentation.learning
 
 /** 사용자가 한 일. 권한 값은 그 일이 일어난 때 화면이 읽어 함께 싣는다. */
 sealed interface LearningAction {
+    data class OpenExistingLearning(val languageId: String) : LearningAction
+    data object ClickAddLanguage : LearningAction
+    data class SelectLanguage(val languageId: String) : LearningAction
+    data object OpenCurriculum : LearningAction
+    data object GoBack : LearningAction
+    data object BackToHome : LearningAction
     data object ClickStart : LearningAction
     data object ClickStop : LearningAction
     data class SelectContent(val contentId: String) : LearningAction

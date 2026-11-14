@@ -16,7 +16,17 @@ data class LearningUiState(
     val audio: AudioStatus = AudioStatus.Checking,
     /** "학습 시작" 거절 문구. 학습 종료를 누르면 지운다. */
     val startRefusedMessage: String? = null,
+    /** 학습 OFF일 때 보여 줄 상위 화면. 학습 ON이면 차량/재생 상태가 우선한다. */
+    val pane: LearningPane = LearningPane.HOME,
+    val languageChosenInPicker: String? = null,
 )
+
+enum class LearningPane {
+    HOME,
+    LANGUAGE_PICKER,
+    CURRICULUM,
+    READY,
+}
 
 /** 화면(LearningScreen)이 읽은 권한 값. Action에 실어 ViewModel로 넘긴다(화면에 표시하지 않음). */
 data class PermissionUiModel(

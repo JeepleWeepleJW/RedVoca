@@ -51,6 +51,7 @@ class LearningViewModel @Inject constructor(
      * ON_RESUME(ReturnToScreen)에서는 요청하지 않는다.
      */
     private var permissionsRequested = false
+    private val navigationHistory = java.util.ArrayDeque<LearningPane>()
 
     init {
         // viewModelScope는 Main.immediate라 StateFlow의 현재 값이 생성 직후 바로 반영된다.
@@ -65,7 +66,12 @@ class LearningViewModel @Inject constructor(
                     }
                     is SessionState.Ready -> observeLearningState().collect { learning ->
                         _uiState.update {
-                            it.copy(isLoading = false, loadErrorMessage = null, catalog = st.catalog, learning = learning)
+                            it.copy(
+                                isLoading = false,
+                                loadErrorMessage = null,
+                                catalog = st.catalog,
+                                learning = learning,
+                            )
                         }
                     }
                 }
@@ -78,6 +84,26 @@ class LearningViewModel @Inject constructor(
 
     fun onAction(action: LearningAction) {
         when (action) {
+            is LearningAction.OpenExistingLearning -> {
+                if (!selectLanguage(action.languageId)) return
+                _uiState.update { it.copy(startRefusedMessage = null) }
+                navigateTo(LearningPane.CURRICULUM)
+            }
+            LearningAction.ClickAddLanguage -> {
+                _uiState.update { it.copy(languageChosenInPicker = null) }
+                navigateTo(LearningPane.LANGUAGE_PICKER)
+            }
+            is LearningAction.SelectLanguage -> {
+                if (!selectLanguage(action.languageId)) return
+                _uiState.update { it.copy(startRefusedMessage = null, languageChosenInPicker = action.languageId) }
+                navigateTo(LearningPane.CURRICULUM)
+            }
+            LearningAction.OpenCurriculum -> returnToPane(LearningPane.CURRICULUM)
+            LearningAction.GoBack -> goBack()
+            LearningAction.BackToHome -> {
+                navigationHistory.clear()
+                _uiState.update { it.copy(pane = LearningPane.HOME) }
+            }
             LearningAction.ClickStart -> {
                 val id = _uiState.value.learning.contentId ?: return
                 viewModelScope.launch {
@@ -90,12 +116,15 @@ class LearningViewModel @Inject constructor(
             }
             LearningAction.ClickStop -> {
                 _uiState.update { it.copy(startRefusedMessage = null) }
+                returnToPane(LearningPane.CURRICULUM)
                 stopLearning()
             }
             is LearningAction.SelectContent -> {
+                if (_uiState.value.catalog?.content(action.contentId) == null) return
                 // 거절 문구는 그 콘텐츠에 대한 것이므로 다른 콘텐츠를 고르면 지운다.
                 _uiState.update { it.copy(startRefusedMessage = null) }
                 selectContent(action.contentId)
+                navigateTo(LearningPane.READY)
             }
             LearningAction.ClickListen -> {
                 // 버튼 표시와 같은 기준으로 보낼 명령을 정한다. 재생 허가 자체는 세션 게이트가 한다.
@@ -121,6 +150,43 @@ class LearningViewModel @Inject constructor(
                 if (changed) restartVehicle()
             }
         }
+    }
+
+    private fun navigateTo(pane: LearningPane) {
+        val current = _uiState.value.pane
+        if (current == pane) return
+        navigationHistory.addLast(current)
+        _uiState.update { it.copy(pane = pane) }
+    }
+
+    private fun goBack() {
+        val previous = navigationHistory.pollLast() ?: LearningPane.HOME
+        _uiState.update { it.copy(pane = previous, startRefusedMessage = null) }
+    }
+
+    private fun returnToPane(pane: LearningPane) {
+        if (_uiState.value.pane == pane) return
+        while (navigationHistory.isNotEmpty()) {
+            if (navigationHistory.pollLast() == pane) {
+                _uiState.update { it.copy(pane = pane) }
+                return
+            }
+        }
+        navigateTo(pane)
+    }
+
+    private fun selectLanguage(languageId: String): Boolean {
+        val state = _uiState.value
+        val catalog = state.catalog ?: return false
+        val contentId = state.learning.contentId
+            ?.let(catalog::content)
+            ?.takeIf { it.languageId == languageId }
+            ?.contentId
+            ?: state.learning.activeContentIdsByLanguage[languageId]
+            ?: catalog.contents.firstOrNull { it.languageId == languageId }?.contentId
+            ?: return false
+        selectContent(contentId)
+        return true
     }
 
     /** 허용되지 않은 권한만(알림은 API 33 이상에서만). */

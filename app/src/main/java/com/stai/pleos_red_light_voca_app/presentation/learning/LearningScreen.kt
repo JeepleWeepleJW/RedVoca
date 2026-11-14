@@ -70,7 +70,7 @@ fun LearningScreen(modifier: Modifier = Modifier, viewModel: LearningViewModel =
         state = state,
         onAction = viewModel::onAction,
         modifier = modifier,
-        // '상태' 카드는 debug(디버그 가능) 빌드에서만 보인다(사용자 결정 2026-11-09). 실사용자(release)에게는 보이지 않는다.
+        // 정차 상태에서 학습 세션이 꺼져 있을 때만 디버그 패널로 스크롤할 수 있다.
         showStatus = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
         debugPanel = { DebugPanel() },
     )

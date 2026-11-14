@@ -2,6 +2,7 @@ package com.stai.pleos_red_light_voca_app.presentation.learning
 
 import com.stai.pleos_red_light_voca_app.domain.gate.GatePhase
 import com.stai.pleos_red_light_voca_app.domain.learning.LearningState
+import com.stai.pleos_red_light_voca_app.domain.learning.PlaybackEnd
 import com.stai.pleos_red_light_voca_app.domain.learning.PlaybackPhase
 import com.stai.pleos_red_light_voca_app.domain.session.AudioStatus
 
@@ -31,7 +32,9 @@ data class ListenButton(val label: String, val command: ListenCommand?) {
                 ListenButton("멈춤", ListenCommand.PAUSE)
             !audio.isReadyFor(s.contentId) -> DISABLED // Checking·Unavailable·이 콘텐츠 음원 누락
             s.currentChapterId == null -> DISABLED
-            s.gatePhase == GatePhase.ARMED -> ListenButton("듣기", ListenCommand.PLAY)
+            s.gatePhase == GatePhase.ARMED ||
+                (s.gatePhase == GatePhase.USED && s.lastPlaybackEnd == PlaybackEnd.USER_PAUSE && s.canResumeAtUsedStop) ->
+                ListenButton("듣기", ListenCommand.PLAY)
             else -> DISABLED
         }
 

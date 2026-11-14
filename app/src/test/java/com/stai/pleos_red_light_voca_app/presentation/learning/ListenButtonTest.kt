@@ -2,6 +2,7 @@ package com.stai.pleos_red_light_voca_app.presentation.learning
 
 import com.stai.pleos_red_light_voca_app.domain.gate.GatePhase
 import com.stai.pleos_red_light_voca_app.domain.learning.LearningState
+import com.stai.pleos_red_light_voca_app.domain.learning.PlaybackEnd
 import com.stai.pleos_red_light_voca_app.domain.learning.PlaybackPhase
 import com.stai.pleos_red_light_voca_app.domain.session.AudioStatus
 import org.junit.Assert.assertEquals
@@ -37,6 +38,12 @@ class ListenButtonTest {
         }
         // 재생이 끝나면(IDLE) 멈춤이 아님(이번 정차는 이미 사용)
         assertNull(lb(on(GatePhase.USED, PlaybackPhase.IDLE)).command)
+    }
+
+    @Test fun valid_user_paused_stop_can_resume_but_invalid_stop_cannot() {
+        val paused = on(GatePhase.USED).copy(lastPlaybackEnd = PlaybackEnd.USER_PAUSE)
+        assertNull(lb(paused).command)
+        assertEquals(ListenCommand.PLAY, lb(paused.copy(canResumeAtUsedStop = true)).command)
     }
 
     @Test fun other_phases_are_disabled() {

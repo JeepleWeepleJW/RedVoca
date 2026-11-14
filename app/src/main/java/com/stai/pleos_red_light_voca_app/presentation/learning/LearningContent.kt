@@ -1,64 +1,43 @@
 package com.stai.pleos_red_light_voca_app.presentation.learning
 
-import androidx.annotation.DrawableRes
-import androidx.compose.foundation.BorderStroke
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.stai.pleos_red_light_voca_app.R
-import com.stai.pleos_red_light_voca_app.core.entity.Catalog
+import com.stai.pleos_red_light_voca_app.core.common.LearningConfig
+import com.stai.pleos_red_light_voca_app.core.entity.Content
 import com.stai.pleos_red_light_voca_app.domain.gate.GatePhase
-import com.stai.pleos_red_light_voca_app.domain.learning.LearningState
-import com.stai.pleos_red_light_voca_app.presentation.theme.VocaColors
-import com.stai.pleos_red_light_voca_app.presentation.theme.VocaType
+import com.stai.pleos_red_light_voca_app.domain.learning.PlaybackEnd
+import com.stai.pleos_red_light_voca_app.domain.learning.PlaybackPhase
+import com.stai.pleos_red_light_voca_app.domain.session.AudioStatus
+import com.stai.pleos_red_light_voca_app.presentation.theme.VocaColors as Ink
 
-/**
- * 학습 화면 본문(B안: 이어 하기 카드 + '다른 콘텐츠 고르기' 접힌 목록). 상태와 [onAction]만 받는다.
- * 무엇을 보일지는 [LearningCard.of]가 정하고, 여기서는 hi-fi(`design/learning/LEARN-hifi-B.html`) 크기·색 토큰으로 그리기만 한다(1px = 1dp, 글자 px = sp).
- * [showStatus]가 true일 때만 '상태' 카드를 그린다(debug 빌드 전용). [debugPanel]은 본문 끝에 그린다(debug 빌드의 디버그 패널 자리).
- */
+private val LayoutScale = staticCompositionLocalOf { 1f }
+private val stopSpeed = LearningConfig().stopSpeedKmh
+@Composable
+private fun Int.ui() = (this * LayoutScale.current).dp
+
 @Composable
 fun LearningContent(
     state: LearningUiState,
@@ -67,375 +46,282 @@ fun LearningContent(
     showStatus: Boolean = false,
     debugPanel: @Composable () -> Unit = {},
 ) {
-    val card = LearningCard.of(state)
-    // 펼침은 화면만의 상태. 학습 ON 등으로 고르기가 잠기면 접힌 것으로 본다.
-    var expandedRequested by rememberSaveable { mutableStateOf(false) }
-    val expanded = expandedRequested && card.picker?.enabled == true
-
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(VocaColors.Bg)
-            .verticalScroll(rememberScrollState()),
-        contentAlignment = Alignment.TopCenter,
-    ) {
-        Column(
-            modifier = Modifier
-                .widthIn(max = 960.dp)
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 48.dp, bottom = 48.dp),
-        ) {
-            Text("정차 중 영단어 학습", style = VocaType.AppTitle, color = VocaColors.TextMuted)
-            Spacer(Modifier.height(24.dp))
-            ResumeCard(card, onAction)
-            card.picker?.let { picker ->
-                Spacer(Modifier.height(24.dp))
-                PickerRow(picker, expanded) { expandedRequested = !expandedRequested }
-                if (expanded) {
-                    Spacer(Modifier.height(16.dp))
-                    ContentList(picker.rows) { id ->
-                        onAction(LearningAction.SelectContent(id))
-                        expandedRequested = false
+    val s = state.learning
+    val locked = (s.vehicle.speedKmh ?: 0f) > stopSpeed || s.learningOn && (
+        s.vehicle.speedKmh == null || s.vehicle.speedFailure != null || s.vehicle.gearFailure != null)
+    BackHandler(enabled = locked || s.learningOn || state.pane != LearningPane.HOME) {
+        if (!locked && !s.learningOn) {
+            onAction(LearningAction.GoBack)
+        }
+    }
+    BoxWithConstraints(modifier.fillMaxSize().background(Ink.Bg)) {
+        val height = maxHeight
+        val scale = minOf(maxWidth.value / 1920f, height.value / 1080f).coerceIn(.38f, 1.3f)
+        CompositionLocalProvider(LayoutScale provides scale) {
+            val hasDebugPanel = showStatus && !locked && !s.learningOn
+            Column(if (hasDebugPanel) Modifier.verticalScroll(rememberScrollState()) else Modifier.fillMaxSize()) {
+                Column(
+                    Modifier.fillMaxWidth().height(height).padding(80.ui()),
+                    verticalArrangement = Arrangement.spacedBy(28.ui()),
+                ) {
+                    when {
+                        locked -> CenterMessage("주행 중")
+                        state.isLoading -> CenterMessage("불러오는 중")
+                        state.catalog == null -> CenterMessage(state.loadErrorMessage ?: "학습을 불러올 수 없어요")
+                        else -> LearningPage(state, onAction)
                     }
                 }
+                if (hasDebugPanel) debugPanel()
             }
-            if (showStatus && state.catalog != null) {
-                Spacer(Modifier.height(24.dp))
-                StatusCard(state.learning, state.catalog)
-            }
-            Spacer(Modifier.height(24.dp))
-            debugPanel()
         }
     }
 }
 
-private val CardShape = RoundedCornerShape(16.dp)
-private val InnerShape = RoundedCornerShape(12.dp)
-
-/** 이어 하기 카드: 높이 506 고정 = 32 + 42 + 16 + 8 + 24 + 240 + 24 + 88 + 32 */
 @Composable
-private fun ResumeCard(card: LearningCard, onAction: (LearningAction) -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(506.dp)
-            .clip(CardShape)
-            .background(VocaColors.Bg)
-            .border(2.dp, VocaColors.Border, CardShape)
-            .padding(32.dp),
-    ) {
-        Box(Modifier.height(42.dp + 16.dp + 8.dp)) {
-            card.header?.let { Header(it) }
-        }
-        Spacer(Modifier.height(24.dp))
-        Stage(card)
-        Spacer(Modifier.height(24.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().height(88.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PrimaryButtonView(card.primary, Modifier.weight(2f)) {
-                when (card.primary.action) {
-                    PrimaryAction.Start -> onAction(LearningAction.ClickStart)
-                    is PrimaryAction.Listen -> onAction(LearningAction.ClickListen)
-                    null -> Unit
-                }
-            }
-            Box(Modifier.weight(1f)) {
-                card.secondary?.let { b ->
-                    SecondaryButtonView(b) {
-                        when (b) {
-                            SecondaryButton.StopLearning -> onAction(LearningAction.ClickStop)
-                            is SecondaryButton.NextContent -> onAction(LearningAction.SelectContent(b.contentId))
+private fun ColumnScope.CenterMessage(text: String) {
+    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+        Label(text, 80, bold = true)
+    }
+}
+
+private val languageNames = mapOf("en" to "영어", "ja" to "일본어", "zh" to "중국어", "es" to "스페인어")
+private val nativeNames = mapOf("en" to "English", "ja" to "日本語", "zh" to "中文", "es" to "Español")
+private fun languageName(id: String) = languageNames[id] ?: id
+private val Content.topic get() = title.substringAfter(": ").trim()
+
+@Composable
+private fun ColumnScope.LearningPage(state: LearningUiState, act: (LearningAction) -> Unit) {
+    val s = state.learning
+    val contents = state.catalog?.contents.orEmpty()
+    val chosen = contents.find { it.contentId == s.contentId }
+    val lang = if (s.learningOn) chosen?.languageId else s.selectedLanguageId
+    val lessons = contents.filter { it.languageId == lang }
+    val day = lessons.indexOf(chosen) + 1
+    val language = languageName(lang ?: "en")
+    val header = "$language · Day$day"
+    if (s.learningOn && chosen != null) {
+        PlaybackPage(state, chosen, header, act)
+        return
+    }
+    when (state.pane) {
+        LearningPane.HOME, LearningPane.LANGUAGE_PICKER -> LanguagePage(state, contents, act)
+        LearningPane.CURRICULUM -> CurriculumPage(state, lessons, language, act)
+        LearningPane.READY -> if (chosen != null) ReadyPage(state, chosen, header, act)
+    }
+}
+
+private fun nextLesson(lessons: List<Content>, completed: Map<String, Int>) =
+    lessons.firstOrNull { (completed[it.contentId] ?: 0) < it.chapters.size } ?: lessons.firstOrNull()
+
+@Composable
+private fun ColumnScope.LanguagePage(state: LearningUiState, contents: List<Content>, act: (LearningAction) -> Unit) {
+    val s = state.learning
+    val enrolled = s.enrolledLanguageIds
+    val available = languageNames.keys.filterNot { it in enrolled }
+    val languageList = available.joinToString(" | ") { languageName(it) }
+    val context = LocalContext.current
+    val picker = state.pane == LearningPane.LANGUAGE_PICKER
+    val pickerIds = languageNames.keys.filter { it in available || it == state.languageChosenInPicker }
+    val first = enrolled.isEmpty()
+    Header(if (picker || first) "공부할 언어 고르기" else "어떤 언어를 학습할까요?",
+        if (picker || first) "공부할 언어를 선택하세요." else "기존 학습을 이어가거나 새로운 언어를 추가하세요.",
+        onBack = if (picker) ({ act(LearningAction.GoBack) }) else null)
+    BoxWithConstraints(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.CenterStart) {
+        if (first && !picker) {
+            Choice("새로운 학습", "학습할 언어를 선택하세요", languageList,
+                Modifier.widthIn(max = 864.ui()).fillMaxWidth(), outline = true) { act(LearningAction.ClickAddLanguage) }
+        } else {
+            val cards: @Composable (Modifier) -> Unit = { slot ->
+                if (picker) {
+                    pickerIds.forEach { id ->
+                        val open = contents.any { it.languageId == id }
+                        val detail = nativeNames[id].orEmpty()
+                        Choice("새로운 학습", languageName(id), detail, slot) {
+                            if (open) act(LearningAction.SelectLanguage(id))
+                            else Toast.makeText(context, "${languageName(id)} 학습은 아직 열리지 않았어요.", Toast.LENGTH_SHORT).show()
                         }
                     }
+                } else {
+                    enrolled.forEach { id ->
+                        val list = contents.filter { it.languageId == id }
+                        val resume = list.find {
+                            it.contentId == s.activeContentIdsByLanguage[id] &&
+                                (s.completedByContent[it.contentId] ?: 0) < it.chapters.size
+                        } ?: nextLesson(list, s.completedByContent)
+                        Choice("기존 학습", languageName(id), "Day${list.indexOf(resume) + 1}", slot) {
+                            act(LearningAction.OpenExistingLearning(id))
+                        }
+                    }
+                    if (available.isNotEmpty()) Choice("새로운 학습", "학습할 언어를 선택하세요", languageList, slot, outline = true) {
+                        act(LearningAction.ClickAddLanguage)
+                    }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun Header(h: CardHeader) {
-    Column {
-        Row(
-            modifier = Modifier.fillMaxWidth().height(42.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    h.title, style = VocaType.CardTitle, color = VocaColors.Text,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
-                )
-                Spacer(Modifier.width(12.dp))
-                Text("(${h.chapterCount}챕터)", style = VocaType.Caption, color = VocaColors.TextMuted, maxLines = 1)
-            }
-            Text(h.progressText, style = VocaType.CardTitle, color = VocaColors.Text, maxLines = 1)
-        }
-        Spacer(Modifier.height(16.dp))
-        ProgressBar(h.progressFraction)
-    }
-}
-
-@Composable
-private fun ProgressBar(fraction: Float) {
-    val shape = RoundedCornerShape(4.dp)
-    Box(Modifier.fillMaxWidth().height(8.dp).clip(shape).background(VocaColors.Track)) {
-        Box(Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).fillMaxHeight().background(VocaColors.Accent))
-    }
-}
-
-/** '지금' 칸: 높이 240 고정. 재생 중이면 왼쪽 띠 8 + 단어·뜻, 아니면 상태 한 줄(+보조 한 줄). */
-@Composable
-private fun Stage(card: LearningCard) {
-    val now = card.nowPlaying
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(240.dp)
-            .clip(InnerShape)
-            .background(VocaColors.Surface),
-    ) {
-        if (now != null) Box(Modifier.width(8.dp).fillMaxHeight().background(VocaColors.Accent))
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-                .padding(start = if (now != null) 24.dp else 32.dp, end = 32.dp, top = 24.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.Center,
-        ) {
-            if (now != null) {
-                StatusLineView(card.status, small = true)
-                Spacer(Modifier.height(8.dp))
-                Text(now.word, style = VocaType.Word, color = VocaColors.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text(now.partOfSpeech, style = VocaType.CaptionItalic, color = VocaColors.TextMuted, maxLines = 1,
-                        modifier = Modifier.alignByBaseline())
-                    Text(now.meaningKo, style = VocaType.Meaning, color = VocaColors.Text, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis, modifier = Modifier.alignByBaseline())
+            if (maxWidth < 520.dp) {
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    cards(Modifier.fillMaxWidth())
                 }
             } else {
-                StatusLineView(card.status, small = false)
-            }
-        }
-    }
-}
-
-@Composable
-private fun StatusLineView(line: StatusLine, small: Boolean) {
-    val muted = line.tone == StatusTone.OFF || line.tone == StatusTone.WAIT
-    val textColor = if (muted) VocaColors.TextMuted else VocaColors.Text
-    val style = when {
-        small -> VocaType.StatusSmall
-        line.strong -> VocaType.StatusStrong
-        else -> VocaType.Status
-    }
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Icon(
-                painterResource(line.icon.res), contentDescription = null,
-                tint = line.tone.color, modifier = Modifier.size(if (small) 24.dp else 32.dp),
-            )
-            Text(line.text, style = style, color = textColor, maxLines = line.maxLines, overflow = TextOverflow.Ellipsis)
-        }
-        line.hint?.let {
-            Spacer(Modifier.height(8.dp))
-            // 아이콘 32 + 사이 12 만큼 들여 상태 글자와 줄을 맞춘다.
-            Text(it, style = VocaType.Caption, color = VocaColors.TextMuted, maxLines = 1, modifier = Modifier.padding(start = 44.dp))
-        }
-    }
-}
-
-@Composable
-private fun PrimaryButtonView(b: PrimaryButton, modifier: Modifier, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        enabled = b.enabled,
-        modifier = modifier.height(88.dp),
-        shape = InnerShape,
-        border = BorderStroke(2.dp, if (b.enabled) VocaColors.Primary else VocaColors.DisabledBorder),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = VocaColors.Primary,
-            contentColor = VocaColors.OnPrimary,
-            disabledContainerColor = VocaColors.DisabledBg,
-            disabledContentColor = VocaColors.DisabledText,
-        ),
-        contentPadding = PaddingValues(horizontal = 20.dp),
-    ) {
-        ButtonContent(b.icon, b.label, 32.dp, VocaType.Button)
-    }
-}
-
-@Composable
-private fun SecondaryButtonView(b: SecondaryButton, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(64.dp),
-        shape = InnerShape,
-        border = BorderStroke(2.dp, VocaColors.Primary),
-        colors = ButtonDefaults.buttonColors(containerColor = VocaColors.Bg, contentColor = VocaColors.Primary),
-        contentPadding = PaddingValues(horizontal = 20.dp),
-    ) {
-        ButtonContent(b.icon, b.label, 24.dp, VocaType.Secondary)
-    }
-}
-
-@Composable
-private fun ButtonContent(icon: ButtonIcon, label: String, iconSize: Dp, style: TextStyle) {
-    Icon(painterResource(icon.res), contentDescription = null, modifier = Modifier.size(iconSize))
-    Spacer(Modifier.width(12.dp))
-    Text(label, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
-}
-
-/** '다른 콘텐츠 고르기' 줄: 높이 64. 학습 ON이면 비활성 + 잠금 안내. */
-@Composable
-private fun PickerRow(picker: Picker, expanded: Boolean, onToggle: () -> Unit) {
-    val enabled = picker.enabled
-    val border = when {
-        !enabled -> VocaColors.DisabledBorder
-        expanded -> VocaColors.Primary
-        else -> VocaColors.BorderSubtle
-    }
-    val fg = if (enabled) VocaColors.Text else VocaColors.DisabledText
-    val side = if (enabled) VocaColors.TextMuted else VocaColors.DisabledText
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .clip(InnerShape)
-            .background(if (enabled) VocaColors.Surface else VocaColors.DisabledBg)
-            .border(2.dp, border, InnerShape)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onToggle)
-            .semantics { stateDescription = if (expanded) "펼침" else "접힘" }
-            .padding(horizontal = 24.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text(picker.label, style = VocaType.Secondary, color = fg, maxLines = 1, modifier = Modifier.weight(1f))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val icon = when {
-                picker.lockHint != null -> R.drawable.ic_lock
-                expanded -> R.drawable.ic_expand_less
-                else -> R.drawable.ic_expand_more
-            }
-            Icon(painterResource(icon), contentDescription = null, tint = side, modifier = Modifier.size(24.dp))
-            picker.lockHint?.let { Text(it, style = VocaType.Caption, color = side, maxLines = 1) }
-        }
-    }
-}
-
-/** 펼친 목록: 행 높이 72, 행 사이 16, 행 전체 누름. */
-@Composable
-private fun ContentList(rows: List<ContentRow>, onSelect: (String) -> Unit) {
-    Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        rows.forEach { r ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(72.dp)
-                    .clip(InnerShape)
-                    .background(VocaColors.Surface)
-                    .border(2.dp, if (r.selected) VocaColors.Primary else VocaColors.BorderSubtle, InnerShape)
-                    .selectable(selected = r.selected, role = Role.RadioButton) { onSelect(r.contentId) }
-                    .padding(horizontal = 24.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Icon(
-                    painterResource(if (r.selected) R.drawable.ic_radio_button_checked else R.drawable.ic_radio_button_unchecked),
-                    contentDescription = null,
-                    tint = if (r.selected) VocaColors.Primary else VocaColors.TextMuted,
-                    modifier = Modifier.size(28.dp),
-                )
-                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                    Text(r.title, style = VocaType.Secondary, color = VocaColors.Text, maxLines = 1,
-                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                    Spacer(Modifier.width(8.dp))
-                    Text(r.chapterText, style = VocaType.Caption, color = VocaColors.TextMuted, maxLines = 1)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(32.ui())) {
+                    cards(Modifier.weight(1f))
                 }
-                Text(if (r.done) LearningCard.DONE else r.progressText, style = VocaType.Caption, color = VocaColors.TextMuted, maxLines = 1)
-                if (r.selected) Text("선택됨", style = VocaType.CaptionStrong, color = VocaColors.Text, maxLines = 1)
             }
         }
     }
 }
 
-@get:DrawableRes
-private val StatusIcon.res: Int
-    get() = when (this) {
-        StatusIcon.TOGGLE_OFF -> R.drawable.ic_toggle_off
-        StatusIcon.DIRECTIONS_CAR -> R.drawable.ic_directions_car
-        StatusIcon.VOLUME_UP -> R.drawable.ic_volume_up
-        StatusIcon.GRAPHIC_EQ -> R.drawable.ic_graphic_eq
-        StatusIcon.SCHEDULE -> R.drawable.ic_schedule
-        StatusIcon.CHECK_CIRCLE -> R.drawable.ic_check_circle
-        StatusIcon.WARNING -> R.drawable.ic_warning
-        StatusIcon.HOURGLASS -> R.drawable.ic_hourglass_empty
+private val upcomingTopics = listOf(
+    "인사와 소개", "식사와 주문", "여행과 숙소", "쇼핑과 결제", "시간과 약속",
+    "건강과 생활", "날씨와 계절", "감정과 대화", "문화와 취미", "복습과 정리",
+)
+
+@Composable
+private fun ColumnScope.CurriculumPage(state: LearningUiState, lessons: List<Content>, language: String, act: (LearningAction) -> Unit) {
+    val s = state.learning
+    Header("$language 커리큘럼", "좌우로 넘겨 학습을 선택하세요.") { act(LearningAction.GoBack) }
+    val today = nextLesson(lessons, s.completedByContent)
+    val items = lessons.mapIndexed { i, content ->
+        val done = s.completedByContent[content.contentId] ?: 0
+        CurriculumCardModel(content.contentId, "Day${i + 1}", content.topic, content.chapters.size, status = when {
+            done >= content.chapters.size -> CurriculumCardStatus.COMPLETED
+            content == today -> CurriculumCardStatus.CURRENT
+            else -> CurriculumCardStatus.UPCOMING
+        }, completedWords = done)
     }
-
-private val StatusTone.color: Color
-    get() = when (this) {
-        StatusTone.OFF -> VocaColors.StatusOff
-        StatusTone.WAIT -> VocaColors.StatusWait
-        StatusTone.READY -> VocaColors.StatusReady
-        StatusTone.PLAYING -> VocaColors.StatusPlaying
-        StatusTone.DONE -> VocaColors.StatusDone
-        StatusTone.WARN -> VocaColors.StatusWarn
+    val previews = if (s.selectedLanguageId == "en") {
+        upcomingTopics.mapIndexedNotNull { index, topic ->
+            val day = index + 3
+            if (day <= lessons.size) null else CurriculumCardModel(
+                id = "preview-en-$day", dayLabel = "Day$day", title = topic,
+                wordCount = 0, status = CurriculumCardStatus.UNRELEASED,
+            )
+        }
+    } else emptyList()
+    val context = LocalContext.current
+    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+        CurriculumCarousel(items + previews, today?.contentId, { item ->
+            if (item.status == CurriculumCardStatus.UNRELEASED) {
+                Toast.makeText(context, "${item.dayLabel} 학습은 아직 열리지 않았어요.", Toast.LENGTH_SHORT).show()
+            } else act(LearningAction.SelectContent(item.id))
+        })
     }
-
-@get:DrawableRes
-private val ButtonIcon.res: Int
-    get() = when (this) {
-        ButtonIcon.PLAY_CIRCLE -> R.drawable.ic_play_circle
-        ButtonIcon.PLAY_ARROW -> R.drawable.ic_play_arrow
-        ButtonIcon.PAUSE -> R.drawable.ic_pause
-        ButtonIcon.REPLAY -> R.drawable.ic_replay
-        ButtonIcon.STOP_CIRCLE -> R.drawable.ic_stop_circle
-        ButtonIcon.SKIP_NEXT -> R.drawable.ic_skip_next
-    }
-
-// ---- debug 빌드 전용 '상태' 카드(시안에 없음, 세부 판정 확인용) ----
-
-private fun gateText(p: GatePhase) = when (p) {
-    GatePhase.INACTIVE -> "학습 꺼짐"
-    GatePhase.WAITING_DRIVE -> "주행 대기"
-    GatePhase.DRIVE_CONFIRMING -> "주행 확인 중"
-    GatePhase.DETECTING -> "정차 감지 중"
-    GatePhase.STOP_CONFIRMING -> "정차 확인 중"
-    GatePhase.ARMED -> "재생 가능 — 듣기 버튼이나 차량 Play 키를 누르세요"
-    GatePhase.ARMED_CREEP -> "서행 중(재생 불가)"
-    GatePhase.USED -> "이번 정차 재생 사용함"
 }
 
 @Composable
-private fun StatusCard(s: LearningState, catalog: Catalog) {
-    val content = s.contentId?.let { catalog.content(it) }
-    val word = s.currentChapterId?.let { id -> content?.chapters?.firstOrNull { it.chapterId == id } }
-    val v = s.vehicle
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("상태", style = MaterialTheme.typography.titleMedium)
-            Text("학습: ${if (s.learningOn) "ON" else "OFF"}")
-            Text("판정: ${s.gatePhase.name} (${gateText(s.gatePhase)})")
-            Text("재생: ${s.playback.name}")
-            Text(
-                "속도: " + (v.speedKmh?.let { "%.1f km/h".format(it) } ?: "-") +
-                    (v.speedFailure?.let { " ($it)" } ?: "")
-            )
-            Text("기어: ${v.gear ?: "-"}" + (v.gearFailure?.let { " ($it)" } ?: ""))
-            val chapterText = when {
-                word != null -> "${word.word} — ${word.meaningKo}"
-                // 콘텐츠를 골랐고 다음 챕터가 없을 때만 완료로 표시(미선택·로딩 전은 "-")
-                content != null && s.currentChapterId == null && s.totalChapters > 0 -> "모두 완료"
-                else -> "-"
+private fun ColumnScope.ReadyPage(state: LearningUiState, chosen: Content, header: String, act: (LearningAction) -> Unit) {
+    val s = state.learning
+    Header(header, chosen.topic) { act(LearningAction.GoBack) }
+    val checking = state.audio == AudioStatus.Checking
+    val unavailable = !checking && !state.audio.isReadyFor(chosen.contentId)
+    if (unavailable) {
+        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.CenterStart) {
+            Column(verticalArrangement = Arrangement.spacedBy(20.ui())) {
+                Label("음원이 준비되지 않았어요", 52, bold = true)
+                Label("다른 콘텐츠를 선택해 학습을 시작할 수 있어요.", 28, Ink.TextMuted)
             }
-            Text("현재 챕터: $chapterText")
-            Text("진도: ${s.completedChapters}/${s.totalChapters}")
-            Text("마지막 재생 종료: ${s.lastPlaybackEnd?.name ?: "-"}")
-            if (s.sessionCompleted) Text("콘텐츠 완료")
+        }
+        ActionButton("다른 콘텐츠 고르기", R.drawable.ic_play_circle, Modifier.widthIn(max = 680.ui()).fillMaxWidth()) {
+            act(LearningAction.OpenCurriculum)
+        }
+    } else {
+        CenterMessage("오늘 ${chosen.chapters.size}개 단어")
+        Column(Modifier.align(Alignment.CenterHorizontally).widthIn(max = 680.ui()).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(16.ui())) {
+            val refusal = state.startRefusedMessage ?: s.disabledReason?.let { "차량 신호를 확인할 수 없어요" }
+            if (refusal != null) Label(refusal, 22, Ink.TextMuted)
+            ActionButton(if (checking) "음원 확인 중" else "학습 시작", R.drawable.ic_play_circle, Modifier.fillMaxWidth(),
+                enabled = !checking && s.disabledReason == null) { act(LearningAction.ClickStart) }
+            val shape = RoundedCornerShape(12.ui())
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(shape).background(Ink.Surface)
+                .border(1.dp, Ink.Border, shape).clickable(role = Role.Button) { act(LearningAction.OpenCurriculum) }
+                .padding(horizontal = 24.ui(), vertical = 10.ui()), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Label("다른 콘텐츠 고르기", 22)
+                Icon(painterResource(R.drawable.ic_expand_more), null, Modifier.size(24.ui()), Ink.TextMuted)
+            }
         }
     }
+
+}
+
+@Composable
+private fun ColumnScope.PlaybackPage(state: LearningUiState, lesson: Content, header: String, act: (LearningAction) -> Unit) {
+    val s = state.learning
+    val index = lesson.indexOf(s.currentChapterId.orEmpty()).coerceAtLeast(0)
+    val chapter = lesson.chapters[index]
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Label("$header ${lesson.topic}", 30, Ink.TextMuted, modifier = Modifier.weight(1f))
+        Label("${index + 1}/${lesson.chapters.size}", 32, bold = true)
+    }
+    Column(Modifier.fillMaxWidth().weight(1f), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(24.ui(), Alignment.CenterVertically)) {
+        val status = when {
+            s.playback != PlaybackPhase.IDLE -> "듣는 중"
+            s.lastPlaybackEnd == PlaybackEnd.ERROR -> "음원을 재생할 수 없어요"
+            s.lastPlaybackEnd == PlaybackEnd.USER_PAUSE -> "일시정지"
+            s.gatePhase == GatePhase.STOP_CONFIRMING -> "정차 확인 중"
+            else -> "다음 정차 대기"
+        }
+        Label(status, 28, Ink.StatusReady)
+        Label(chapter.word, 144, bold = true, centered = true)
+        Label(chapter.meaningKo, 56, centered = true)
+    }
+    val listen = ListenButton.of(s, state.audio)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.ui())) {
+        ActionButton(listen.label, if (listen.command == ListenCommand.PAUSE) R.drawable.ic_pause else R.drawable.ic_play_arrow,
+            Modifier.weight(1f), enabled = listen.enabled) { act(LearningAction.ClickListen) }
+        ActionButton("학습 종료", R.drawable.ic_stop_circle, Modifier.weight(1f), outline = true) { act(LearningAction.ClickStop) }
+    }
+}
+
+@Composable
+private fun Header(title: String, subtitle: String, onBack: (() -> Unit)? = null) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.ui())) {
+        if (onBack == null) Label("레드보카", 22, Ink.TextMuted)
+        else Row(
+            Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
+                .clickable(role = Role.Button, onClick = onBack).padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(painterResource(R.drawable.ic_arrow_back), null, Modifier.size(24.dp), Ink.Text)
+            Label("이전", 24)
+        }
+        Label(title, 48, bold = true)
+        Label(subtitle, 24, Ink.TextMuted)
+    }
+}
+
+@Composable
+private fun Choice(overline: String, title: String, detail: String, modifier: Modifier, outline: Boolean = false, click: () -> Unit) {
+    val shape = RoundedCornerShape(16.ui())
+    Column(modifier.height(360.ui()).clip(shape)
+        .then(if (outline) Modifier.border(1.dp, Ink.Border, shape) else Modifier.background(Ink.Surface))
+        .clickable(role = Role.Button, onClick = click).padding(40.ui()),
+        verticalArrangement = Arrangement.spacedBy(16.ui(), Alignment.CenterVertically)) {
+        Label(overline, 22, Ink.TextMuted)
+        Label(title, 46, bold = true)
+        Label(detail, 26, Ink.TextMuted)
+    }
+}
+
+@Composable
+private fun ActionButton(label: String, icon: Int, modifier: Modifier, enabled: Boolean = true, outline: Boolean = false, click: () -> Unit) {
+    val shape = RoundedCornerShape(12.ui())
+    val fg = when { !enabled -> Ink.TextMuted; outline -> Ink.Primary; else -> Ink.OnPrimary }
+    Row(modifier.height(88.ui().coerceAtLeast(48.dp)).clip(shape)
+        .then(if (outline) Modifier.border(2.dp, Ink.Primary, shape) else Modifier.background(if (enabled) Ink.Primary else Ink.DisabledBg))
+        .clickable(enabled = enabled, role = Role.Button, onClick = click).padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.ui(), Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
+        Icon(painterResource(icon), null, Modifier.size(26.ui().coerceAtLeast(16.dp)), tint = fg)
+        Label(label, 28, fg, bold = true)
+    }
+}
+
+@Composable
+private fun Label(text: String, size: Int, color: Color = Ink.Text, bold: Boolean = false, centered: Boolean = false, modifier: Modifier = Modifier) {
+    val fontSize = (size * LayoutScale.current).coerceAtLeast(13f)
+    Text(text, modifier, color = color, fontSize = fontSize.sp, lineHeight = (fontSize * 1.3f).sp,
+        fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+        textAlign = if (centered) TextAlign.Center else TextAlign.Start, maxLines = 2, overflow = TextOverflow.Ellipsis)
 }

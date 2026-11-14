@@ -349,6 +349,87 @@ class LearningViewModelTest {
         assertEquals("day2", vm.uiState.value.learning.contentId)
     }
 
+    @Test fun fresh_install_starts_at_home_then_language_selection_opens_curriculum() = runTest(dispatcher) {
+        val (_, vm) = readyHarness()
+        assertFalse(vm.uiState.value.learning.hasExistingLearning)
+        assertEquals(LearningPane.HOME, vm.uiState.value.pane)
+
+        vm.onAction(LearningAction.ClickAddLanguage)
+        assertEquals(LearningPane.LANGUAGE_PICKER, vm.uiState.value.pane)
+
+        vm.onAction(LearningAction.SelectLanguage("en"))
+        runCurrent()
+
+        assertTrue(vm.uiState.value.learning.hasExistingLearning)
+        assertEquals("day1", vm.uiState.value.learning.contentId)
+        assertEquals(LearningPane.CURRICULUM, vm.uiState.value.pane)
+
+        vm.onAction(LearningAction.SelectContent("day2"))
+        runCurrent()
+        assertEquals("day2", vm.uiState.value.learning.contentId)
+        assertEquals(LearningPane.READY, vm.uiState.value.pane)
+    }
+
+    @Test fun go_back_uses_real_navigation_origin_and_is_stable_when_repeated() = runTest(dispatcher) {
+        val (_, vm) = readyHarness()
+
+        vm.onAction(LearningAction.ClickAddLanguage)
+        vm.onAction(LearningAction.SelectLanguage("en"))
+        runCurrent()
+        assertEquals(LearningPane.CURRICULUM, vm.uiState.value.pane)
+
+        vm.onAction(LearningAction.GoBack)
+        assertEquals(LearningPane.LANGUAGE_PICKER, vm.uiState.value.pane)
+        assertEquals("en", vm.uiState.value.learning.selectedLanguageId)
+
+        vm.onAction(LearningAction.SelectLanguage("en"))
+        vm.onAction(LearningAction.SelectContent("day2"))
+        runCurrent()
+        assertEquals(LearningPane.READY, vm.uiState.value.pane)
+        vm.onAction(LearningAction.GoBack)
+        assertEquals(LearningPane.CURRICULUM, vm.uiState.value.pane)
+        vm.onAction(LearningAction.GoBack)
+        assertEquals(LearningPane.LANGUAGE_PICKER, vm.uiState.value.pane)
+        vm.onAction(LearningAction.GoBack)
+        assertEquals(LearningPane.HOME, vm.uiState.value.pane)
+        vm.onAction(LearningAction.GoBack)
+        assertEquals(LearningPane.HOME, vm.uiState.value.pane)
+
+        vm.onAction(LearningAction.OpenExistingLearning("en"))
+        assertEquals(LearningPane.CURRICULUM, vm.uiState.value.pane)
+        vm.onAction(LearningAction.GoBack)
+        assertEquals(LearningPane.HOME, vm.uiState.value.pane)
+    }
+
+    @Test fun manual_pause_can_resume_same_chapter_without_automatic_resume() = runTest(dispatcher) {
+        val (h, vm) = readyHarness()
+        vm.onAction(LearningAction.ClickStart)
+        runCurrent()
+        fun emit(e: VehicleEvent) { assertTrue(h.vehicleFactory.events.tryEmit(e)); runCurrent() }
+        emit(VehicleEvent.GearChanged(Gear.DRIVE))
+        emit(VehicleEvent.SpeedChanged(30f))
+        advanceTimeBy(3_000); runCurrent()
+        emit(VehicleEvent.SpeedChanged(0f))
+        advanceTimeBy(3_000); runCurrent()
+
+        val first = HandlePlayCommandUseCase(h.session, Logger.NONE)(PlaySource.APP_UI, "test")
+        assertTrue(first is PlayCommandResult.Play)
+        h.session.controllerOrNull!!.onPauseCommand("test")
+        runCurrent()
+
+        val paused = vm.uiState.value.learning
+        assertEquals(GatePhase.USED, paused.gatePhase)
+        assertEquals(PlaybackPhase.IDLE, paused.playback)
+        assertEquals(ListenCommand.PLAY, ListenButton.of(paused, vm.uiState.value.audio).command)
+
+        val resumed = HandlePlayCommandUseCase(h.session, Logger.NONE)(PlaySource.APP_UI, "test")
+        assertTrue(resumed is PlayCommandResult.Play)
+        assertEquals(
+            (first as PlayCommandResult.Play).ticket.chapterId,
+            (resumed as PlayCommandResult.Play).ticket.chapterId,
+        )
+    }
+
     @Test fun ui_state_shows_load_failure() = runTest(dispatcher) {
         val h = Harness(backgroundScope)
         h.startApp()
