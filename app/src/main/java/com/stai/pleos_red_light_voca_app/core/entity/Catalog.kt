@@ -9,6 +9,8 @@ data class Content(
     val contentId: String,
     val title: String,
     val chapters: List<Chapter>,
+    val languageId: String = "en",
+    val initiallyCompleted: Boolean = false,
 ) {
     fun indexOf(chapterId: String): Int = chapters.indexOfFirst { it.chapterId == chapterId }
 }

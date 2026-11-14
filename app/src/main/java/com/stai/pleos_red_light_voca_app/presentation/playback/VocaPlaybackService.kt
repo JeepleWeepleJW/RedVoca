@@ -42,7 +42,7 @@ import kotlinx.coroutines.launch
  *
  * - 재생 시작은 [GatedPlayer]가 한다: 학습 ON 중 정차 확정 시 자동 재생, 또는 컨트롤러 Play 명령. 서비스 생성·연결로는 재생하지 않는다.
  * - 포그라운드 서비스(mediaPlayback)는 Media3가 재생 중에 올린다. 알림 갱신 오버라이드로 유지하지 않는다.
- * - onTaskRemoved: 재생 정지 → stopSelf() → super (Pleos 가이드 순서).
+ * - 활성 학습 세션은 태스크 제거 후에도 차량 상태에 따라 계속 재생한다.
  */
 @OptIn(UnstableApi::class)
 @AndroidEntryPoint
@@ -122,8 +122,8 @@ class VocaPlaybackService : MediaLibraryService() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Timber.i("service onTaskRemoved: stop playback -> stopSelf -> super")
-        useCases.stopLearning()
+        // 화면을 닫아도 사용자가 시작한 학습은 다음 정차를 기다린다.
+        if (useCases.getLearningState()?.learningOn == true) return
         player.onServiceEnding()
         stopSelf()
         super.onTaskRemoved(rootIntent)
@@ -135,8 +135,6 @@ class VocaPlaybackService : MediaLibraryService() {
         handler.removeCallbacksAndMessages(null)
         useCases.detachPlayer(player)
         player.onServiceEnding()
-        // 요구 1장: 서비스가 재시작되면 학습은 OFF(진도만 유지). 프로세스가 살아 서비스만 다시 만들어져도 같게 한다.
-        useCases.stopLearning()
         session?.release()
         session = null
         player.releaseInternal()

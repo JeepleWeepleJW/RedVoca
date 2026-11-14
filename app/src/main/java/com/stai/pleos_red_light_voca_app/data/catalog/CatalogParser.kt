@@ -51,6 +51,8 @@ object CatalogParser {
         if ('/' in id) bad("$where.contentId에 '/'를 쓸 수 없습니다: $id")
         val w = "$where($id)"
         val title = o.requiredString("title", w)
+        val language = if ("languageId" in o) o.requiredString("languageId", w) else "en"
+        if (language !in setOf("en", "ja")) bad("$w.languageId를 지원하지 않습니다: $language")
         val chapters = o["chapters"] as? List<*> ?: bad("$w.chapters 배열이 필요합니다")
         if (chapters.isEmpty()) bad("$w.chapters가 비어 있습니다")
         val seen = HashSet<String>()
@@ -70,7 +72,10 @@ object CatalogParser {
             if (!seen.add(chId)) bad("$w 안에 chapterId 중복: $chId")
             Chapter(chId, word, pos, meaning)
         }
-        return Content(id, title, list)
+        val initiallyCompleted = if ("initiallyCompleted" in o) {
+            o["initiallyCompleted"] as? Boolean ?: bad("$w.initiallyCompleted는 불리언이어야 합니다")
+        } else false
+        return Content(id, title, list, language, initiallyCompleted)
     }
 
     @Suppress("UNCHECKED_CAST")

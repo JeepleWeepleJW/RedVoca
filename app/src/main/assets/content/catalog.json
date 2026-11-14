@@ -4,6 +4,7 @@
   "contents": [
     {
       "contentId": "sample-day01",
+      "initiallyCompleted": true,
       "title": "샘플 1일차: 도로와 이동",
       "chapters": [
         { "chapterId": "d01-01", "word": "signal", "partOfSpeech": "noun", "meaningKo": "신호" },

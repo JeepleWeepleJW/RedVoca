@@ -48,6 +48,7 @@ class CatalogParserTest {
         assertTrue("$r", r is CatalogResult.Success)
         val catalog = (r as CatalogResult.Success).catalog
         assertEquals(2, catalog.contents.size)
+        assertEquals(listOf("sample-day01"), catalog.contents.filter { it.initiallyCompleted }.map { it.contentId })
         catalog.contents.forEach { assertEquals(10, it.chapters.size) }
         assertEquals(Chapter("d01-01", "signal", "noun", "신호"), catalog.contents[0].chapters[0])
     }

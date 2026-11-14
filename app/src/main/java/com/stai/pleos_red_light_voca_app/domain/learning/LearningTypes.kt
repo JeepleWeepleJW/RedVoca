@@ -9,6 +9,11 @@ import com.stai.pleos_red_light_voca_app.core.entity.VehicleSignal
 /** UI·미디어 서비스가 구독하는 상태 */
 data class LearningState(
     val learningOn: Boolean = false,
+    /** 저장된 학습 선택 또는 진도가 있어 홈에서 이어서 학습할 수 있는지. */
+    val hasExistingLearning: Boolean = false,
+    val enrolledLanguageIds: Set<String> = emptySet(),
+    val selectedLanguageId: String? = null,
+    val activeContentIdsByLanguage: Map<String, String> = emptyMap(),
     /** 선택(또는 학습 중)한 콘텐츠 */
     val contentId: String? = null,
     /** 다음에 재생할 챕터. 콘텐츠를 모두 끝냈으면 null */
@@ -19,6 +24,7 @@ data class LearningState(
     /** 콘텐츠 ID → 완료한 챕터 수(카탈로그의 모든 콘텐츠). 화면의 콘텐츠 목록 진도 표시용 */
     val completedByContent: Map<String, Int> = emptyMap(),
     val gatePhase: GatePhase = GatePhase.INACTIVE,
+    val canResumeAtUsedStop: Boolean = false,
     val playback: PlaybackPhase = PlaybackPhase.IDLE,
     val vehicle: VehicleSnapshot = VehicleSnapshot(),
     /** null이면 학습 가능. 값이 있으면 학습 비활성(시작 불가) */

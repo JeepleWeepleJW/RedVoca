@@ -62,6 +62,26 @@ private class FakeProgressRepository(initial: Progress = Progress()) : ProgressR
         calls += "saveActiveContent"
         progress = progress.copy(activeContentId = contentId)
     }
+    override suspend fun saveLearningSelection(languageId: String, contentId: String) {
+        saveActiveContent(contentId)
+        progress = progress.copy(
+            enrolledLanguageIds = progress.enrolledLanguageIds + languageId,
+            selectedLanguageId = languageId,
+            activeContentIdsByLanguage = progress.activeContentIdsByLanguage + (languageId to contentId),
+        )
+    }
+    override suspend fun migrateLearningSelections(
+        enrolledLanguageIds: Set<String>,
+        selectedLanguageId: String?,
+        activeContentIdsByLanguage: Map<String, String>,
+    ) {
+        calls += "migrateLearningSelections"
+        progress = progress.copy(
+            enrolledLanguageIds = progress.enrolledLanguageIds + enrolledLanguageIds,
+            selectedLanguageId = selectedLanguageId,
+            activeContentIdsByLanguage = progress.activeContentIdsByLanguage + activeContentIdsByLanguage,
+        )
+    }
 }
 
 private class FakePlayer : PlayerControl {
@@ -93,11 +113,15 @@ private class RecordingLogger(private val logs: MutableList<String>) : Logger {
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
-private class Harness(val scope: TestScope, val repo: FakeProgressRepository = FakeProgressRepository()) {
+private class Harness(
+    val scope: TestScope,
+    val repo: FakeProgressRepository = FakeProgressRepository(),
+    testCatalog: Catalog = catalog,
+) {
     val player = FakePlayer()
     val logs = mutableListOf<String>()
     val controller = LearningController(
-        catalog = catalog,
+        catalog = testCatalog,
         progressRepository = repo,
         player = player,
         clock = MonotonicClock { scope.testScheduler.currentTime },
@@ -172,6 +196,58 @@ class LearningControllerTest {
         assertEquals(GatePhase.INACTIVE, state.gatePhase)
     }
 
+    @Test fun legacy_english_enrollment_survives_adding_japanese_and_restart() = runTest {
+        val multiLanguageCatalog = Catalog(
+            catalog.contents + Content(
+                "ja-day1",
+                "Day 1",
+                listOf(Chapter("ja-1", "信号", "noun", "신호")),
+                languageId = "ja",
+            ),
+        )
+        val repo = FakeProgressRepository(Progress(activeContentId = "day1"))
+        val first = Harness(this, repo, multiLanguageCatalog)
+        first.controller.restore()
+        runCurrent()
+        assertEquals(setOf("en"), first.state.enrolledLanguageIds)
+
+        assertTrue(first.controller.selectContent("ja-day1"))
+        runCurrent()
+
+        val second = Harness(this, repo, multiLanguageCatalog)
+        second.controller.restore()
+        runCurrent()
+        assertEquals(setOf("en", "ja"), second.state.enrolledLanguageIds)
+        assertEquals("ja", second.state.selectedLanguageId)
+        assertEquals("ja-day1", second.state.contentId)
+    }
+
+    @Test fun initially_completed_content_is_reviewable_without_creating_enrollment() = runTest {
+        val seeded = Content(
+            "seeded",
+            "Day 1",
+            listOf(
+                Chapter("s-1", "one", "noun", "하나"),
+                Chapter("s-2", "two", "noun", "둘"),
+            ),
+            initiallyCompleted = true,
+        )
+        val h = Harness(this, FakeProgressRepository(), Catalog(listOf(seeded)))
+        h.controller.restore()
+
+        assertFalse(h.state.hasExistingLearning)
+        assertEquals(2, h.state.completedChapters)
+        assertNull(h.state.currentChapterId)
+        assertEquals(StartResult.Started, h.controller.startLearning("seeded"))
+        assertEquals("s-1", h.state.currentChapterId)
+        assertEquals(2, h.state.completedChapters)
+
+        val previous = FakeProgressRepository(Progress(mapOf("seeded" to "s-1")))
+        val returning = Harness(this, previous, Catalog(listOf(seeded)))
+        returning.controller.restore()
+        assertEquals(2, returning.state.completedChapters)
+    }
+
     @Test fun completed_by_content_covers_all_contents_after_restore() = test(
         FakeProgressRepository(Progress(mapOf("day1" to "d1-1", "day2" to "d2-2"), activeContentId = "day1")),
     ) {
@@ -190,13 +266,14 @@ class LearningControllerTest {
         complete(playTicket())
         assertEquals(mapOf("day1" to 1, "day2" to 2), state.completedByContent)
 
-        // 완료한 day2를 다시 시작(C6)하면 day2 진도만 0으로 돌아간다
+        // 완료한 day2를 복습해도 완료 이력은 유지하고 재생 커서만 첫 단어로 돌아간다.
         controller.stopLearning()
         assertTrue(controller.selectContent("day2"))
         assertEquals(StartResult.Started, controller.startLearning("day2"))
         scope.runCurrent()
-        assertEquals(mapOf("day1" to 1, "day2" to 0), state.completedByContent)
-        assertEquals(0, state.completedChapters)
+        assertEquals(mapOf("day1" to 1, "day2" to 2), state.completedByContent)
+        assertEquals(2, state.completedChapters)
+        assertEquals("d2-1", state.currentChapterId)
     }
 
     @Test fun vehicle_events_without_learning_do_not_arm_or_play() = test {
@@ -318,20 +395,27 @@ class LearningControllerTest {
         assertNotEquals(t1, t2)
     }
 
-    @Test fun last_chapter_completion_ends_session() = test(
+    @Test fun last_chapter_completion_keeps_session_and_loops_to_first() = test(
         FakeProgressRepository(Progress(mapOf("day1" to "d1-2"), "day1")),
     ) {
         start(); driveAndArm(); stop()
         val t = playTicket()
         assertEquals("d1-3", t.chapterId)
         complete(t)
-        assertFalse(state.learningOn)
-        assertTrue(state.sessionCompleted)
-        assertEquals(GatePhase.INACTIVE, state.gatePhase)
-        assertNull(state.currentChapterId)
+        assertTrue(state.learningOn)
+        assertFalse(state.sessionCompleted)
+        assertEquals(GatePhase.USED, state.gatePhase)
+        assertEquals("d1-1", state.currentChapterId)
         assertEquals(3, state.completedChapters)
         assertEquals("day1" to "d1-3", repo.savedCompleted.last())
         assertTrue(player.pauses.isEmpty())
+
+        driveAndArm(); stop()
+        val looped = playTicket()
+        assertEquals("d1-1", looped.chapterId)
+        complete(looped)
+        assertEquals(listOf("day1" to "d1-3"), repo.savedCompleted)
+        assertEquals(3, state.completedChapters)
     }
 
     @Test fun starting_completed_content_restarts_from_first_chapter() = test(
@@ -342,7 +426,8 @@ class LearningControllerTest {
         assertEquals("d1-1", state.currentChapterId)
         assertFalse(state.sessionCompleted)
         runCurrentAll()
-        assertNull(repo.progress.lastCompletedChapterIds["day1"])
+        assertEquals("d1-3", repo.progress.lastCompletedChapterIds["day1"])
+        assertEquals(3, state.completedChapters)
     }
 
     @Test fun restart_restores_progress_and_learning_off() = runTest {
@@ -574,18 +659,17 @@ class LearningControllerTest {
     // ---- 저장 순서 ----
 
     @Test fun persistence_runs_in_call_order_even_when_earlier_calls_finish_late() = test(
-        FakeProgressRepository(Progress(mapOf("day1" to "d1-3"), "day1")).also {
-            it.delays["restartContent"] = 10_000
-            it.delays["saveActiveContent"] = 500
+        FakeProgressRepository().also {
+            it.delays["saveActiveContent"] = 10_000
         },
     ) {
-        start() // restartContent(10s)
+        start()
         driveAndArm(); stop()
         val t = playTicket()
-        complete(t) // 약 6초 시점. restartContent는 아직 안 끝났다
-        assertTrue("nothing may finish before restartContent", repo.calls.isEmpty())
+        complete(t)
+        assertTrue("nothing may finish before active selection", repo.calls.isEmpty())
         advance(20_000)
-        assertEquals(listOf("restartContent", "saveCompleted"), repo.calls)
+        assertEquals(listOf("saveActiveContent", "saveCompleted"), repo.calls)
         assertEquals(mapOf("day1" to "d1-1"), repo.progress.lastCompletedChapterIds)
     }
 
@@ -607,16 +691,18 @@ class LearningControllerTest {
         val t = playTicket()
         controller.onPlaybackStarted(t)
         controller.onVehicleEvent(VehicleEvent.SignalBlocked(VehicleSignal.SPEED, SignalBlock.PERMISSION_DENIED))
-        assertFalse(state.learningOn)
-        assertEquals(listOf(PlaybackEnd.LEARNING_STOPPED), player.pauses)
+        assertTrue(state.learningOn)
+        assertEquals(listOf(PlaybackEnd.VEHICLE_DATA_ERROR), player.pauses)
         assertEquals(mapOf(VehicleSignal.SPEED to SignalBlock.PERMISSION_DENIED), state.disabledReason?.blocked)
         assertTrue(controller.startLearning("day1") is StartResult.Disabled)
         assertEquals(PlayDecision.Ignored(IgnoreReason.DISABLED), play())
-        assertFalse(state.learningOn)
-        // 권한을 받아 값이 들어오면 다시 시작 가능
+        assertTrue(state.learningOn)
+        assertEquals("d1-1", state.currentChapterId)
+        // 권한을 받아 값이 들어오면 세션은 유지되지만 재주행 전에는 재생하지 않는다.
         speed(0f)
         assertNull(state.disabledReason)
-        assertEquals(StartResult.Started, controller.startLearning("day1"))
+        assertEquals(StartResult.AlreadyOn, controller.startLearning("day1"))
+        assertEquals(PlayDecision.Ignored(IgnoreReason.NOT_ARMED), play())
     }
 
     @Test fun unsupported_gear_disables_learning() = test {
@@ -628,7 +714,7 @@ class LearningControllerTest {
 
     // ---- 정차당 1회, 사용자 명령, 포커스 ----
 
-    @Test fun pause_command_stops_and_no_retry_in_same_stop() = test {
+    @Test fun pause_command_stops_and_explicit_play_resumes_same_chapter() = test {
         start(); driveAndArm(); stop()
         val t = playTicket()
         controller.onPlaybackStarted(t)
@@ -637,8 +723,32 @@ class LearningControllerTest {
         assertEquals(PlaybackEnd.USER_PAUSE, state.lastPlaybackEnd)
         assertTrue(player.pauses.isEmpty()) // 정지는 MediaSession이 수행
         advance(60_000)
-        assertEquals(PlayDecision.Ignored(IgnoreReason.STOP_ALREADY_USED), play())
+        val resumed = play()
+        assertTrue(resumed is PlayDecision.Play)
+        assertEquals("d1-1", (resumed as PlayDecision.Play).ticket.chapterId)
         assertEquals("d1-1", state.currentChapterId)
+    }
+
+    @Test fun manual_pause_cannot_resume_after_vehicle_is_no_longer_stationary() = test {
+        start(); driveAndArm(); stop()
+        controller.onPlaybackStarted(playTicket())
+        controller.onPauseCommand("app")
+
+        speed(0.8f)
+
+        assertEquals(PlayDecision.Ignored(IgnoreReason.NOT_ARMED), play())
+        assertEquals("d1-1", state.currentChapterId)
+    }
+
+    @Test fun manual_pause_can_resume_on_valid_first_stop_in_park() = test {
+        gear(Gear.OTHER); speed(0f)
+        start(); advance(3_000)
+        assertEquals(GatePhase.ARMED, state.gatePhase)
+        controller.onPlaybackStarted(playTicket())
+        controller.onPauseCommand("app")
+
+        assertTrue(state.canResumeAtUsedStop)
+        assertTrue(play() is PlayDecision.Play)
     }
 
     @Test fun stop_command_keeps_learning_on_and_no_retry() = test {
@@ -796,6 +906,71 @@ class LearningControllerTest {
         // 재주행 뒤 다음 정차에서 다음 턴을 다시 자동 재생(중단된 d1-1부터)
         driveAndArm(); stopForAutoPlay()
         assertEquals(listOf("d1-1", "d1-1"), player.autoStarts.map { it.chapterId })
+    }
+
+    @Test fun natural_completion_chains_next_words_and_wraps_in_same_stop() = test {
+        player.autoCapable = true
+        start(); driveAndArm(); stopForAutoPlay()
+
+        repeat(4) {
+            val ticket = player.autoStarts.last()
+            controller.onPlaybackStarted(ticket)
+            controller.onPlaybackEnded(ticket)
+            runCurrentAll()
+        }
+
+        assertEquals(listOf("d1-1", "d1-2", "d1-3", "d1-1", "d1-2"), player.autoStarts.map { it.chapterId })
+        assertEquals(PlaybackPhase.PREPARING, state.playback)
+        assertEquals(3, state.completedChapters)
+        assertEquals("d1-2", state.currentChapterId)
+    }
+
+    @Test fun motion_cancels_chained_ticket_and_stale_completion_cannot_restart_it() = test {
+        player.autoCapable = true
+        start(); driveAndArm(); stopForAutoPlay()
+        val first = player.autoStarts.single()
+        controller.onPlaybackStarted(first)
+        controller.onPlaybackEnded(first)
+        val chained = player.autoStarts.last()
+        controller.onPlaybackStarted(chained)
+
+        speed(5f)
+        controller.onPlaybackEnded(chained)
+
+        assertEquals(2, player.autoStarts.size)
+        assertEquals(PlaybackPhase.IDLE, state.playback)
+        assertFalse(controller.isTicketValid(chained))
+        assertEquals("d1-2", state.currentChapterId)
+    }
+
+    @Test fun explicit_learning_exit_cancels_chain_and_stale_completion_is_ignored() = test {
+        player.autoCapable = true
+        start(); driveAndArm(); stopForAutoPlay()
+        val first = player.autoStarts.single()
+        controller.onPlaybackStarted(first)
+        controller.onPlaybackEnded(first)
+        val chained = player.autoStarts.last()
+
+        controller.stopLearning()
+        controller.onPlaybackEnded(chained)
+
+        assertFalse(state.learningOn)
+        assertEquals(2, player.autoStarts.size)
+        assertFalse(controller.isTicketValid(chained))
+    }
+
+    @Test fun user_pause_never_auto_resumes_at_a_later_stop() = test {
+        player.autoCapable = true
+        start(); driveAndArm(); stopForAutoPlay()
+        val t = player.autoStarts.single()
+        controller.onPlaybackStarted(t)
+        controller.onPauseCommand("app")
+
+        driveAndArm(); stopForAutoPlay()
+
+        assertEquals(1, player.autoStarts.size)
+        assertEquals(PlaybackEnd.USER_PAUSE, state.lastPlaybackEnd)
+        assertTrue(play() is PlayDecision.Play)
     }
 
     @Test fun no_auto_play_while_learning_off() = test {

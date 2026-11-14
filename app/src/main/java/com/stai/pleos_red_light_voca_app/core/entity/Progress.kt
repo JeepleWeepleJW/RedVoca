@@ -10,4 +10,7 @@ package com.stai.pleos_red_light_voca_app.core.entity
 data class Progress(
     val lastCompletedChapterIds: Map<String, String> = emptyMap(),
     val activeContentId: String? = null,
+    val enrolledLanguageIds: Set<String> = emptySet(),
+    val selectedLanguageId: String? = null,
+    val activeContentIdsByLanguage: Map<String, String> = emptyMap(),
 )

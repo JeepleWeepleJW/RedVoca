@@ -15,4 +15,16 @@ interface ProgressRepository {
     suspend fun restartContent(contentId: String)
 
     suspend fun saveActiveContent(contentId: String)
+
+    /** 언어 등록과 그 언어에서 선택한 콘텐츠를 한 번에 저장한다. */
+    suspend fun saveLearningSelection(languageId: String, contentId: String) {
+        saveActiveContent(contentId)
+    }
+
+    /** 기존 단일 콘텐츠 진도를 다국어 학습 정보로 올릴 때 사용한다. */
+    suspend fun migrateLearningSelections(
+        enrolledLanguageIds: Set<String>,
+        selectedLanguageId: String?,
+        activeContentIdsByLanguage: Map<String, String>,
+    ) = Unit
 }

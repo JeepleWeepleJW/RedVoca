@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.stai.pleos_red_light_voca_app.core.entity.Progress
 import com.stai.pleos_red_light_voca_app.domain.repository.ProgressRepository
@@ -17,9 +18,10 @@ import java.io.IOException
 import timber.log.Timber
 
 /**
- * DataStore(Preferences) 기반 진도 저장소. 저장하는 값은 contentId와 chapterId뿐이다.
+ * DataStore(Preferences) 기반 진도·학습 언어 저장소.
  * - `completed.<contentId>` = 마지막 완료 chapterId
  * - `activeContentId` = 마지막 학습 콘텐츠 ID
+ * - `enrolledLanguageIds`, `selectedLanguageId`, `activeLanguage.<languageId>` = 언어별 학습 선택
  */
 class ProgressRepositoryImpl(private val dataStore: DataStore<Preferences>) : ProgressRepository {
 
@@ -49,10 +51,37 @@ class ProgressRepositoryImpl(private val dataStore: DataStore<Preferences>) : Pr
         dataStore.edit { it[ACTIVE_KEY] = contentId }
     }
 
+    override suspend fun saveLearningSelection(languageId: String, contentId: String) {
+        dataStore.edit {
+            it[ENROLLED_LANGUAGES_KEY] = it[ENROLLED_LANGUAGES_KEY].orEmpty() + languageId
+            it[SELECTED_LANGUAGE_KEY] = languageId
+            it[ACTIVE_KEY] = contentId
+            it[activeLanguageKey(languageId)] = contentId
+        }
+    }
+
+    override suspend fun migrateLearningSelections(
+        enrolledLanguageIds: Set<String>,
+        selectedLanguageId: String?,
+        activeContentIdsByLanguage: Map<String, String>,
+    ) {
+        dataStore.edit { prefs ->
+            prefs[ENROLLED_LANGUAGES_KEY] = prefs[ENROLLED_LANGUAGES_KEY].orEmpty() + enrolledLanguageIds
+            selectedLanguageId?.let { prefs[SELECTED_LANGUAGE_KEY] = it }
+            activeContentIdsByLanguage.forEach { (languageId, contentId) ->
+                prefs[activeLanguageKey(languageId)] = contentId
+            }
+        }
+    }
+
     companion object {
         internal const val COMPLETED_PREFIX = "completed."
         internal val ACTIVE_KEY = stringPreferencesKey("activeContentId")
+        internal val ENROLLED_LANGUAGES_KEY = stringSetPreferencesKey("enrolledLanguageIds")
+        internal val SELECTED_LANGUAGE_KEY = stringPreferencesKey("selectedLanguageId")
+        internal const val ACTIVE_LANGUAGE_PREFIX = "activeLanguage."
         private fun completedKey(contentId: String) = stringPreferencesKey(COMPLETED_PREFIX + contentId)
+        private fun activeLanguageKey(languageId: String) = stringPreferencesKey(ACTIVE_LANGUAGE_PREFIX + languageId)
 
         @Volatile private var instance: ProgressRepositoryImpl? = null
 
@@ -79,10 +108,20 @@ class ProgressRepositoryImpl(private val dataStore: DataStore<Preferences>) : Pr
 
 private fun Preferences.toProgress(): Progress {
     val completed = LinkedHashMap<String, String>()
+    val activeByLanguage = LinkedHashMap<String, String>()
     for ((key, value) in asMap()) {
         if (key.name.startsWith(ProgressRepositoryImpl.COMPLETED_PREFIX) && value is String) {
             completed[key.name.removePrefix(ProgressRepositoryImpl.COMPLETED_PREFIX)] = value
         }
+        if (key.name.startsWith(ProgressRepositoryImpl.ACTIVE_LANGUAGE_PREFIX) && value is String) {
+            activeByLanguage[key.name.removePrefix(ProgressRepositoryImpl.ACTIVE_LANGUAGE_PREFIX)] = value
+        }
     }
-    return Progress(completed, this[ProgressRepositoryImpl.ACTIVE_KEY])
+    return Progress(
+        lastCompletedChapterIds = completed,
+        activeContentId = this[ProgressRepositoryImpl.ACTIVE_KEY],
+        enrolledLanguageIds = this[ProgressRepositoryImpl.ENROLLED_LANGUAGES_KEY].orEmpty(),
+        selectedLanguageId = this[ProgressRepositoryImpl.SELECTED_LANGUAGE_KEY],
+        activeContentIdsByLanguage = activeByLanguage,
+    )
 }

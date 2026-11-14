@@ -72,8 +72,12 @@ class StopGate(
      * 이동(> moveSpeedKmh)하면 끝나고, 그 뒤는 매 정차 전에 D 주행 확인이 필요하다. 정차당 1회는 같다.
      */
     private var firstStopWithoutDrive = false
+    private var usedStopStillValid = false
 
     val canPlay: Boolean get() = phase == GatePhase.ARMED
+    val canResumeAtUsedStop: Boolean
+        get() = phase == GatePhase.USED && usedStopStillValid && latestSpeedKmh != null &&
+            latestSpeedKmh!! <= config.stopSpeedKmh && (firstStopWithoutDrive || latestGear == Gear.DRIVE)
 
     /** 학습 ON. 주행 조건부터 다시 확인한다(지금 이미 주행 중이어도 지금부터 3초). */
     fun activate(speedKmh: Float?, gear: Gear?) {
@@ -81,6 +85,7 @@ class StopGate(
         latestSpeedKmh = speedKmh
         latestGear = gear
         firstStopWithoutDrive = true
+        usedStopStillValid = false
         moveTo(GatePhase.WAITING_DRIVE)
         evaluate()
     }
@@ -88,6 +93,7 @@ class StopGate(
     /** 학습 OFF */
     fun deactivate() {
         cancelTimer()
+        usedStopStillValid = false
         moveTo(GatePhase.INACTIVE)
     }
 
@@ -106,6 +112,7 @@ class StopGate(
     fun onDataError() {
         latestSpeedKmh = null
         latestGear = null
+        usedStopStillValid = false
         if (phase == GatePhase.INACTIVE) return
         // 첫 정차에서 이미 재생 시도를 썼으면, 복구 뒤 같은 정차에서 다시 ARMED가 되지 않게 한다
         if (phase == GatePhase.USED) firstStopWithoutDrive = false
@@ -119,6 +126,7 @@ class StopGate(
      */
     fun consume(): Boolean {
         if (phase != GatePhase.ARMED) return false
+        usedStopStillValid = true
         moveTo(GatePhase.USED)
         return true
     }
@@ -126,6 +134,9 @@ class StopGate(
     private fun evaluate(): HaltReason? {
         val gear = latestGear
         val speed = latestSpeedKmh
+        if (phase == GatePhase.USED && speed != null && speed > config.stopSpeedKmh) {
+            usedStopStillValid = false
+        }
 
         if (firstStopWithoutDrive && speed != null) {
             if (speed <= config.moveSpeedKmh) {
@@ -139,6 +150,7 @@ class StopGate(
         }
 
         if (gear != null && gear != Gear.DRIVE) {
+            if (!firstStopWithoutDrive) usedStopStillValid = false
             // 기어 이탈: 타이머 취소, 주행 이력 초기화
             cancelTimer()
             moveTo(GatePhase.WAITING_DRIVE)

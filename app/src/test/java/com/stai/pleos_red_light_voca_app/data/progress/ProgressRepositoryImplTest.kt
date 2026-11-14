@@ -113,6 +113,22 @@ class ProgressRepositoryImplTest {
         assertEquals(emptyMap<String, String>(), r.load().lastCompletedChapterIds)
     }
 
+    @Test fun saveLearningSelectionPersistsEnrollmentSelectionAndActiveContent() = runBlocking {
+        val r = repo()
+        r.saveLearningSelection("en", "day1")
+        r.saveLearningSelection("ja", "ja-day1")
+
+        assertEquals(
+            Progress(
+                activeContentId = "ja-day1",
+                enrolledLanguageIds = setOf("en", "ja"),
+                selectedLanguageId = "ja",
+                activeContentIdsByLanguage = mapOf("en" to "day1", "ja" to "ja-day1"),
+            ),
+            r.load(),
+        )
+    }
+
     @Test fun restoredAfterRestart() = runBlocking {
         file = File(tmp.root, "p.preferences_pb")
         val (first, firstJob) = open()

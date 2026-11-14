@@ -50,7 +50,12 @@ class LearningController(
 
     private val gate = StopGate(config, clock, scheduler) { old, new ->
         logger.i("gate $old -> $new")
-        _state.update { it.copy(gatePhase = new) }
+        _state.update {
+            it.copy(
+                gatePhase = new,
+                canResumeAtUsedStop = if (new == GatePhase.USED) it.canResumeAtUsedStop else false,
+            )
+        }
         // ARMED는 판정의 마지막 전이라, 여기서 consume(USED)해도 이어지는 판정과 겹치지 않는다
         if (new == GatePhase.ARMED) tryAutoPlay()
     }
@@ -59,6 +64,8 @@ class LearningController(
     private val completed = mutableMapOf<String, String>()
     private val blocked = linkedMapOf<VehicleSignal, SignalBlock>()
     private var activeTicket: PlayTicket? = null
+    /** 현재 학습 세션의 재생 커서. 저장 진도와 분리해 마지막 단어 뒤 첫 단어로 순환한다. */
+    private var sessionChapterIndex: Int? = null
     private var nextTicketId = 1L
 
     /**
@@ -93,25 +100,79 @@ class LearningController(
         val progress = progressRepository.load()
         completed.clear()
         completed.putAll(progress.lastCompletedChapterIds)
+        val inferredLanguages = buildSet {
+            progress.activeContentId?.let { catalog.content(it)?.languageId }?.let(::add)
+            progress.lastCompletedChapterIds.keys.mapNotNullTo(this) { catalog.content(it)?.languageId }
+        }
+        // 데모 기본 완료 표시는 저장 진도에만 덧씌운다. 언어 등록 여부는 실제 저장 기록으로만 판단한다.
+        catalog.contents.filter { it.initiallyCompleted }.forEach { content ->
+            content.chapters.lastOrNull()?.let { last -> completed[content.contentId] = last.chapterId }
+        }
+        val enrolledLanguages = progress.enrolledLanguageIds
+            .filterTo(linkedSetOf()) { languageId -> catalog.contents.any { it.languageId == languageId } }
+            .ifEmpty { inferredLanguages }
+        val selectedLanguage = progress.selectedLanguageId
+            ?.takeIf { it in enrolledLanguages }
+            ?: progress.activeContentId?.let { catalog.content(it)?.languageId }
+            ?: enrolledLanguages.firstOrNull()
+        val activeByLanguage = progress.activeContentIdsByLanguage
+            .filter { (languageId, contentId) -> catalog.content(contentId)?.languageId == languageId }
+            .toMutableMap()
+        progress.activeContentId?.let(catalog::content)?.let { content ->
+            activeByLanguage.putIfAbsent(content.languageId, content.contentId)
+        }
+        progress.lastCompletedChapterIds.keys.mapNotNull(catalog::content).forEach { content ->
+            activeByLanguage.putIfAbsent(content.languageId, content.contentId)
+        }
         val selected = progress.activeContentId?.takeIf { catalog.content(it) != null }
+            ?.takeIf { catalog.content(it)?.languageId == selectedLanguage }
+            ?: selectedLanguage?.let(activeByLanguage::get)
+            ?: selectedLanguage?.let { language -> catalog.contents.firstOrNull { it.languageId == language }?.contentId }
             ?: catalog.contents.firstOrNull()?.contentId
-        _state.update { it.copy(learningOn = false) }
+        _state.update {
+            it.copy(
+                learningOn = false,
+                hasExistingLearning = enrolledLanguages.isNotEmpty(),
+                enrolledLanguageIds = enrolledLanguages,
+                selectedLanguageId = selectedLanguage,
+                activeContentIdsByLanguage = activeByLanguage,
+            )
+        }
         selectInternal(selected)
+        if (progress.enrolledLanguageIds != enrolledLanguages ||
+            progress.selectedLanguageId != selectedLanguage ||
+            progress.activeContentIdsByLanguage != activeByLanguage
+        ) {
+            persist("progress migrated to language selections") {
+                progressRepository.migrateLearningSelections(enrolledLanguages, selectedLanguage, activeByLanguage)
+            }
+        }
         logger.i("restore: learning OFF, content=$selected, progress=${progress.lastCompletedChapterIds}")
     }
 
     /** 학습 OFF일 때만 콘텐츠를 바꿀 수 있다. */
     fun selectContent(contentId: String): Boolean {
         if (_state.value.learningOn) return false
-        if (catalog.content(contentId) == null) return false
+        val content = catalog.content(contentId) ?: return false
         selectInternal(contentId)
+        _state.update {
+            it.copy(
+                hasExistingLearning = true,
+                enrolledLanguageIds = it.enrolledLanguageIds + content.languageId,
+                selectedLanguageId = content.languageId,
+                activeContentIdsByLanguage = it.activeContentIdsByLanguage + (content.languageId to content.contentId),
+            )
+        }
+        persist("progress saved: active=$contentId") {
+            progressRepository.saveLearningSelection(content.languageId, contentId)
+        }
         return true
     }
 
     /**
      * 학습 시작(화면 버튼). 재생은 시작하지 않는다. 주행 조건부터 다시 확인한다.
      * 콘텐츠 음원 확인은 이 호출 전에 `AppSession.startLearning`(화면)과 `HandlePlayCommandUseCase`(Play 명령)가 한다.
-     * 이미 모두 끝낸 콘텐츠면 진도를 지우고 첫 챕터부터 시작한다.
+     * 이미 모두 끝낸 콘텐츠는 완료 이력을 유지하고 세션 재생 커서만 첫 챕터부터 시작한다.
      */
     fun startLearning(contentId: String? = _state.value.contentId): StartResult {
         disabledReason()?.let {
@@ -121,20 +182,23 @@ class LearningController(
         if (_state.value.learningOn) return StartResult.AlreadyOn
         val content = contentId?.let { catalog.content(it) } ?: return StartResult.UnknownContent
         if (content.chapters.isEmpty()) return StartResult.UnknownContent
-        val clearProgress = nextChapter(content) == null
-        if (clearProgress) {
-            completed.remove(content.contentId)
-            logger.i("progress cleared (restart completed content ${content.contentId})")
-        }
+        sessionChapterIndex = nextChapter(content)?.let(content.chapters::indexOf) ?: 0
         selectInternal(content.contentId)
-        persist("progress saved: active=${content.contentId}${if (clearProgress) ", cleared" else ""}") {
-            if (clearProgress) {
-                progressRepository.restartContent(content.contentId)
-            } else {
-                progressRepository.saveActiveContent(content.contentId)
-            }
+        persist("progress saved: active=${content.contentId}") {
+            progressRepository.saveLearningSelection(content.languageId, content.contentId)
         }
-        _state.update { it.copy(learningOn = true, sessionCompleted = false) }
+        _state.update {
+            it.copy(
+                learningOn = true,
+                hasExistingLearning = true,
+                enrolledLanguageIds = it.enrolledLanguageIds + content.languageId,
+                selectedLanguageId = content.languageId,
+                activeContentIdsByLanguage = it.activeContentIdsByLanguage + (content.languageId to content.contentId),
+                sessionCompleted = false,
+                lastPlaybackEnd = null,
+            )
+        }
+        refreshProgressState()
         logger.i("learning ON content=${content.contentId} chapter=${_state.value.currentChapterId}")
         val v = _state.value.vehicle
         gate.activate(v.speedKmh, v.gear)
@@ -181,7 +245,9 @@ class LearningController(
                     it.copy(vehicle = v, disabledReason = disabledReason())
                 }
                 logger.i("learning disabled: $blocked")
-                if (_state.value.learningOn) turnOff(PlaybackEnd.LEARNING_STOPPED, sessionCompleted = false)
+                // 신호가 복구될 때 같은 세션·단어에서 계속할 수 있도록 학습과 커서는 유지한다.
+                haltPlayback(PlaybackEnd.VEHICLE_DATA_ERROR)
+                gate.onDataError()
             }
         }
     }
@@ -207,20 +273,31 @@ class LearningController(
             }
         }
         if (s.playback != PlaybackPhase.IDLE) return PlayDecision.Ignored(IgnoreReason.ALREADY_PLAYING)
+        val resumingManualPause = s.lastPlaybackEnd == PlaybackEnd.USER_PAUSE
         when (gate.phase) {
             GatePhase.ARMED -> Unit
+            GatePhase.USED -> {
+                if (!resumingManualPause) return PlayDecision.Ignored(IgnoreReason.STOP_ALREADY_USED)
+                if (!gate.canResumeAtUsedStop) return PlayDecision.Ignored(IgnoreReason.NOT_ARMED)
+            }
             GatePhase.ARMED_CREEP -> return PlayDecision.Ignored(IgnoreReason.CREEPING)
-            GatePhase.USED -> return PlayDecision.Ignored(IgnoreReason.STOP_ALREADY_USED)
             else -> return PlayDecision.Ignored(IgnoreReason.NOT_ARMED)
         }
         val content = s.contentId?.let { catalog.content(it) }
             ?: return PlayDecision.Ignored(IgnoreReason.NO_CONTENT)
-        val chapter = nextChapter(content) ?: return PlayDecision.Ignored(IgnoreReason.NO_CONTENT)
+        val chapter = playbackChapter(content) ?: return PlayDecision.Ignored(IgnoreReason.NO_CONTENT)
         // 오디오 요청 전에 이번 정차를 잠근다(완료·중단·실패 모두 재시도 없음)
-        gate.consume()
+        // 새 정차(ARMED)에서 재개하면 그 정차의 1회 재생 기회를 사용한다.
+        if (!resumingManualPause || gate.phase == GatePhase.ARMED) gate.consume()
         val ticket = PlayTicket(nextTicketId++, content.contentId, chapter.chapterId)
         activeTicket = ticket
-        _state.update { it.copy(playback = PlaybackPhase.PREPARING) }
+        _state.update {
+            it.copy(
+                playback = PlaybackPhase.PREPARING,
+                lastPlaybackEnd = null,
+                canResumeAtUsedStop = gate.canResumeAtUsedStop,
+            )
+        }
         return PlayDecision.Play(ticket)
     }
 
@@ -231,6 +308,8 @@ class LearningController(
     fun tryAutoPlay() {
         val s = _state.value
         if (!s.learningOn || s.playback != PlaybackPhase.IDLE || gate.phase != GatePhase.ARMED) return
+        // 사용자가 직접 멈춘 뒤에는 다음 정차에서도 명시적인 재생 입력을 기다린다.
+        if (s.lastPlaybackEnd == PlaybackEnd.USER_PAUSE) return
         if (!player.canStartAutomatically) {
             logger.i("auto-play waiting: no player attached")
             return
@@ -276,18 +355,41 @@ class LearningController(
             return
         }
         activeTicket = null
-        completed[ticket.contentId] = ticket.chapterId
-        persist("progress saved: ${ticket.contentId}/${ticket.chapterId} completed") {
-            progressRepository.saveCompleted(ticket.contentId, ticket.chapterId)
-        }
-        logger.i("playback COMPLETED ${ticket.contentId}/${ticket.chapterId}; saving progress")
-        _state.update { it.copy(playback = PlaybackPhase.IDLE, lastPlaybackEnd = PlaybackEnd.COMPLETED) }
-        refreshProgressState()
         val content = catalog.content(ticket.contentId)
-        if (content != null && nextChapter(content) == null) {
-            logger.i("last chapter completed: session ended")
-            turnOff(PlaybackEnd.COMPLETED, sessionCompleted = true)
+        val chapterIndex = content?.indexOf(ticket.chapterId) ?: -1
+        val completedIndex = content?.let { c -> completed[c.contentId]?.let(c::indexOf) } ?: -1
+        if (chapterIndex > completedIndex) {
+            completed[ticket.contentId] = ticket.chapterId
+            persist("progress saved: ${ticket.contentId}/${ticket.chapterId} completed") {
+                progressRepository.saveCompleted(ticket.contentId, ticket.chapterId)
+            }
         }
+        logger.i("playback COMPLETED ${ticket.contentId}/${ticket.chapterId}")
+        _state.update { it.copy(playback = PlaybackPhase.IDLE, lastPlaybackEnd = PlaybackEnd.COMPLETED) }
+        if (content != null && content.chapters.isNotEmpty()) {
+            sessionChapterIndex = (chapterIndex + 1).mod(content.chapters.size)
+        }
+        refreshProgressState()
+        tryAutoChain()
+    }
+
+    /** 자연 완료 뒤 현재 정차가 계속 유효하면 다음 단어를 같은 정차에서 이어 재생한다. */
+    private fun tryAutoChain() {
+        val s = _state.value
+        if (!s.learningOn || s.disabledReason != null || s.playback != PlaybackPhase.IDLE) return
+        if (!gate.canResumeAtUsedStop || !player.canStartAutomatically) return
+        val content = s.contentId?.let(catalog::content) ?: return
+        val chapter = playbackChapter(content) ?: return
+        val ticket = PlayTicket(nextTicketId++, content.contentId, chapter.chapterId)
+        activeTicket = ticket
+        _state.update {
+            it.copy(
+                playback = PlaybackPhase.PREPARING,
+                canResumeAtUsedStop = gate.canResumeAtUsedStop,
+            )
+        }
+        logger.i("auto-chain on same stop -> $ticket")
+        player.startAutomatically(ticket)
     }
 
     /** 재생이 끝까지 가지 못하고 멈춤(포커스 상실, 오류, 서비스 종료 등). 진도는 바뀌지 않는다. */
@@ -301,7 +403,9 @@ class LearningController(
 
     private fun onSample() {
         val v = _state.value.vehicle
-        when (gate.onSample(v.speedKmh, v.gear)) {
+        val halt = gate.onSample(v.speedKmh, v.gear)
+        _state.update { it.copy(canResumeAtUsedStop = gate.canResumeAtUsedStop) }
+        when (halt) {
             HaltReason.MOVING -> haltPlayback(PlaybackEnd.MOVING)
             HaltReason.GEAR_NOT_DRIVE -> haltPlayback(PlaybackEnd.GEAR_NOT_DRIVE)
             null -> {
@@ -334,6 +438,7 @@ class LearningController(
     private fun turnOff(reason: PlaybackEnd, sessionCompleted: Boolean) {
         haltPlayback(reason)
         gate.deactivate()
+        sessionChapterIndex = null
         _state.update { it.copy(learningOn = false, sessionCompleted = sessionCompleted) }
         logger.i("learning OFF ($reason)")
     }
@@ -354,6 +459,9 @@ class LearningController(
         return content.chapters.getOrNull(idx + 1) // 알 수 없는 ID(-1)면 첫 챕터
     }
 
+    private fun playbackChapter(content: Content): Chapter? =
+        sessionChapterIndex?.let(content.chapters::getOrNull) ?: nextChapter(content)
+
     private fun selectInternal(contentId: String?) {
         _state.update { it.copy(contentId = contentId) }
         refreshProgressState()
@@ -373,7 +481,7 @@ class LearningController(
             }
             return
         }
-        val next = nextChapter(content)
+        val next = if (_state.value.learningOn) playbackChapter(content) else nextChapter(content)
         _state.update {
             it.copy(
                 currentChapterId = next?.chapterId,
