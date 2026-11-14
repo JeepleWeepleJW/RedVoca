@@ -1,0 +1,5 @@
+영어: Microsoft Azure Speech / en-US-JennyNeural. 기존 영어 음성을 변경 없이 사용.
+한국어: Typecast 이현, SSFM 3.1, normal emotion intensity 0, tempo 0.95.
+Typecast: https://typecast.ai/
+단독 단어 발성이 아닌 문맥 읽기 원음에서 실제 무음의 중심을 찾아 분리. 한국어 속도·피치·음절 길이 후처리 없음.
+승인한 교차로 원음 유지. 영어 → 0.75초 → 한국어 → 0.75초 → 영어.

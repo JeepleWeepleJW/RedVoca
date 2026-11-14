@@ -18,7 +18,7 @@ data class LearningConfig(
     /** 이동 판정: 이 속도 초과를 받는 즉시 재생 중단. (stopSpeedKmh, moveSpeedKmh] 구간은 새 재생만 금지. km/h */
     val moveSpeedKmh: Float = 3.0f,
     /** 챕터 오디오에서 단어와 뜻 사이 무음 길이. ms */
-    val chapterSilenceMs: Long = 600L,
+    val chapterSilenceMs: Long = 750L,
     /** 영어 단어 음성 조각 언어 태그(음원 `<chapterId>.en.wav`) */
     val englishLanguageTag: String = "en-US",
     /** 한국어 뜻 음성 조각 언어 태그(음원 `<chapterId>.ko.wav`) */

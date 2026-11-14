@@ -11,9 +11,9 @@ class ChapterScriptTest {
         assertEquals(
             listOf(
                 ChapterSegment.Speech("en-US", "signal"),
-                ChapterSegment.Silence(600),
+                ChapterSegment.Silence(750),
                 ChapterSegment.Speech("ko-KR", "신호"),
-                ChapterSegment.Silence(600),
+                ChapterSegment.Silence(750),
                 ChapterSegment.Speech("en-US", "signal"),
             ),
             script,
