@@ -6,8 +6,13 @@
 
 ## 영상
 
-- [피칭 영상 보기](docs/videos/redvoca-pitch.mp4)
-- [데모 영상 보기](docs/videos/redvoca-demo.mp4)
+### 피칭 영상
+
+https://github.com/user-attachments/assets/027c8331-0c9f-4972-95fb-d1f5e2990144
+
+### 데모 영상
+
+https://github.com/user-attachments/assets/c64eeda7-b5fa-4d93-9aaf-dc41dfae55e4
 
 ## 학습 방법
 
