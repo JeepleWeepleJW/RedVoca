@@ -16,16 +16,17 @@ android {
         minSdk = 24
         targetSdk = 37
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
+            // 앱 코드까지 R8 전체 모드로 축소·난독화·최적화한다(packageScope 기본값 "**").
+            // 기본 규칙(proguard-android-optimize.txt)은 keepRules.includeDefault 기본값 true로 들어간다.
             optimization {
                 enable = true
-                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
             }
         }
     }
