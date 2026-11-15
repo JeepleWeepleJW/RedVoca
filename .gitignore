@@ -408,3 +408,13 @@ obj/
 
 # 개인 기획 문서(docs/ 하위)
 /docs/
+
+# macOS 폴더 정보 파일
+.DS_Store
+
+# Android Studio "Generate Signed APK" 출력(app/debug, app/release)
+/app/debug/
+/app/release/
+
+# 배포용 APK는 저장소에 둔다(루트 apk/)
+!/apk/*.apk
