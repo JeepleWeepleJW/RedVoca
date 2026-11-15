@@ -348,7 +348,7 @@ class LearningController(
         _state.update { it.copy(playback = PlaybackPhase.PLAYING) }
     }
 
-    /** Player.STATE_ENDED. 이때만 챕터 완료·진도 저장. */
+    /** Player.STATE_ENDED. 이때만 챕터 완료·진도 저장. 정차당 1단어: 같은 정차에서 다음 단어를 이어 재생하지 않는다. */
     fun onPlaybackEnded(ticket: PlayTicket) {
         if (!isTicketValid(ticket)) {
             logger.i("playback ended for stale ticket $ticket (ignored)")
@@ -370,26 +370,6 @@ class LearningController(
             sessionChapterIndex = (chapterIndex + 1).mod(content.chapters.size)
         }
         refreshProgressState()
-        tryAutoChain()
-    }
-
-    /** 자연 완료 뒤 현재 정차가 계속 유효하면 다음 단어를 같은 정차에서 이어 재생한다. */
-    private fun tryAutoChain() {
-        val s = _state.value
-        if (!s.learningOn || s.disabledReason != null || s.playback != PlaybackPhase.IDLE) return
-        if (!gate.canResumeAtUsedStop || !player.canStartAutomatically) return
-        val content = s.contentId?.let(catalog::content) ?: return
-        val chapter = playbackChapter(content) ?: return
-        val ticket = PlayTicket(nextTicketId++, content.contentId, chapter.chapterId)
-        activeTicket = ticket
-        _state.update {
-            it.copy(
-                playback = PlaybackPhase.PREPARING,
-                canResumeAtUsedStop = gate.canResumeAtUsedStop,
-            )
-        }
-        logger.i("auto-chain on same stop -> $ticket")
-        player.startAutomatically(ticket)
     }
 
     /** 재생이 끝까지 가지 못하고 멈춤(포커스 상실, 오류, 서비스 종료 등). 진도는 바뀌지 않는다. */

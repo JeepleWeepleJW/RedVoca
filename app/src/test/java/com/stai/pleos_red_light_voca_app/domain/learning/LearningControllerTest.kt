@@ -908,55 +908,35 @@ class LearningControllerTest {
         assertEquals(listOf("d1-1", "d1-1"), player.autoStarts.map { it.chapterId })
     }
 
-    @Test fun natural_completion_chains_next_words_and_wraps_in_same_stop() = test {
-        player.autoCapable = true
-        start(); driveAndArm(); stopForAutoPlay()
-
-        repeat(4) {
-            val ticket = player.autoStarts.last()
-            controller.onPlaybackStarted(ticket)
-            controller.onPlaybackEnded(ticket)
-            runCurrentAll()
-        }
-
-        assertEquals(listOf("d1-1", "d1-2", "d1-3", "d1-1", "d1-2"), player.autoStarts.map { it.chapterId })
-        assertEquals(PlaybackPhase.PREPARING, state.playback)
-        assertEquals(3, state.completedChapters)
-        assertEquals("d1-2", state.currentChapterId)
-    }
-
-    @Test fun motion_cancels_chained_ticket_and_stale_completion_cannot_restart_it() = test {
+    @Test fun natural_completion_does_not_start_next_word_in_same_stop() = test {
         player.autoCapable = true
         start(); driveAndArm(); stopForAutoPlay()
         val first = player.autoStarts.single()
         controller.onPlaybackStarted(first)
         controller.onPlaybackEnded(first)
-        val chained = player.autoStarts.last()
-        controller.onPlaybackStarted(chained)
+        runCurrentAll()
+        speed(0f)
 
-        speed(5f)
-        controller.onPlaybackEnded(chained)
-
-        assertEquals(2, player.autoStarts.size)
+        // 정차당 1단어: 같은 정차에서 다음 단어를 자동으로도, Play로도 시작하지 않는다
+        assertEquals(1, player.autoStarts.size)
         assertEquals(PlaybackPhase.IDLE, state.playback)
-        assertFalse(controller.isTicketValid(chained))
+        assertEquals(GatePhase.USED, state.gatePhase)
+        assertEquals(PlayDecision.Ignored(IgnoreReason.STOP_ALREADY_USED), play())
+        assertEquals(listOf("day1" to "d1-1"), repo.savedCompleted)
         assertEquals("d1-2", state.currentChapterId)
     }
 
-    @Test fun explicit_learning_exit_cancels_chain_and_stale_completion_is_ignored() = test {
+    @Test fun next_word_plays_only_at_next_stop() = test {
         player.autoCapable = true
         start(); driveAndArm(); stopForAutoPlay()
         val first = player.autoStarts.single()
         controller.onPlaybackStarted(first)
         controller.onPlaybackEnded(first)
-        val chained = player.autoStarts.last()
+        runCurrentAll()
 
-        controller.stopLearning()
-        controller.onPlaybackEnded(chained)
+        driveAndArm(); stopForAutoPlay()
 
-        assertFalse(state.learningOn)
-        assertEquals(2, player.autoStarts.size)
-        assertFalse(controller.isTicketValid(chained))
+        assertEquals(listOf("d1-1", "d1-2"), player.autoStarts.map { it.chapterId })
     }
 
     @Test fun user_pause_never_auto_resumes_at_a_later_stop() = test {
