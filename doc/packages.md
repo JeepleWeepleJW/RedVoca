@@ -16,18 +16,20 @@
 
 | 클래스 | 기능 |
 |---|---|
-| `LearningConfig` | 조정 가능한 상수 모음(정차 판정 속도·유지 시간, 무음 길이, 언어 태그). `init`에서 값 사이 관계를 검증한다. 상수 `LOG_TAG="VocaApp"`, `CATALOG_ASSET_PATH`, `CATALOG_SCHEMA_VERSION=2`. |
+| `LearningConfig` | 조정 가능한 상수 모음(정차 판정 속도·유지 시간, 단어와 뜻 사이 무음 `chapterSilenceMs=750`, 언어 태그). `init`에서 값 사이 관계를 검증한다. 상수 `LOG_TAG="VocaApp"`, `CATALOG_ASSET_PATH`, `CATALOG_SCHEMA_VERSION=2`. |
 | `Logger` | 로그 출력 경계. domain·core는 이것만 본다. `Logger.NONE`은 테스트·기본값. |
 | `MonotonicClock`, `Scheduler`, `Cancellable` | 시간 경계(`fun interface`). 앱·테스트에서 실제/가상 시간을 바꿔 끼운다. |
 | `CoroutineScheduler` | `Scheduler`의 코루틴 구현(`launch { delay(); action() }`). |
 | `metersPerSecondToKmh` | m/s(후진 시 음수) → km/h(절댓값). |
 
+파일: `LearningConfig.kt`, `Logger.kt`, `Time.kt`(`MonotonicClock`·`Scheduler`·`Cancellable`·`CoroutineScheduler`), `Units.kt`(`metersPerSecondToKmh`).
+
 ### `core.entity`
 
 | 클래스 | 기능 |
 |---|---|
-| `Catalog`, `Content`, `Chapter` | 커리큘럼 모델. 콘텐츠(하루 묶음) > 챕터(단어 1개: `word`, `partOfSpeech`, `meaningKo`). |
-| `Progress` | 진도. 콘텐츠별 마지막 완료 챕터 ID와 마지막 활성 콘텐츠 ID만 저장한다(재생 위치 없음). |
+| `Catalog`, `Content`, `Chapter` | 커리큘럼 모델. 콘텐츠(하루 묶음) > 챕터(단어 1개: `word`, `partOfSpeech`, `meaningKo`). `Content`는 학습 언어 `languageId`(기본 `en`)와 데모용 기본 완료 표시 `initiallyCompleted`(기본 `false`)를 갖는다. |
+| `Progress` | 진도와 학습 선택. 콘텐츠별 마지막 완료 챕터 ID, 마지막 활성 콘텐츠 ID, 등록한 언어 `enrolledLanguageIds`, 선택한 언어 `selectedLanguageId`, 언어별 활성 콘텐츠 `activeContentIdsByLanguage`를 저장한다(재생 위치 없음). |
 | `Gear`, `VehicleSignal`, `SignalFailure`, `SignalBlock`, `VehicleEvent` | 차량 입력 모델. `VehicleEvent`는 `SpeedChanged`·`GearChanged`·`SignalFailed`(일시적)·`SignalBlocked`(권한 거부·미지원 같은 지속적 차단) sealed interface. |
 
 ---
@@ -38,19 +40,21 @@
 
 | 클래스 | 기능 |
 |---|---|
-| `StopGate` | 정차 판정 상태 기계. 속도·기어 샘플을 받아 `GatePhase`를 바꾸고, 재생 중이면 멈춰야 할 이유(`HaltReason.MOVING`, `GEAR_NOT_DRIVE`)를 돌려준다. `consume()`으로 정차당 1회 재생을 잠근다. 학습 ON 직후 첫 정차는 주행 확인 없이 인정한다. |
+| `StopGate` | 정차 판정 상태 기계. 속도·기어 샘플을 받아 `GatePhase`를 바꾸고, 재생 중이면 멈춰야 할 이유(`HaltReason.MOVING`, `GEAR_NOT_DRIVE`)를 돌려준다. `consume()`으로 정차당 1회 재생을 잠근다. 학습 ON 직후 첫 정차는 주행 확인 없이 인정한다. `canResumeAtUsedStop`은 이미 쓴 정차가 아직 이어지는지(속도 0.5km/h 이하 유지, D단) 알려 주며, 사용자가 멈춘 단어를 같은 정차에서 **듣기**로 다시 재생할 때만 쓴다. |
 | `GatePhase`, `HaltReason` | 판정 상태(8개)와 정지 이유. |
 
 ### `domain.learning`
 
 | 클래스 | 기능 |
 |---|---|
-| `LearningController` | 학습 세션 상태 기계. 학습 ON/OFF, 콘텐츠 선택, 차량 이벤트 처리, Play 판정(`PlayDecision`), 재생 티켓 발급·검증, 재생 경과 처리, 진도 저장(`Mutex`로 직렬화)을 맡는다. `StopGate`가 `ARMED`가 되면 `tryAutoPlay()`로 자동 재생을 요청한다. |
-| `LearningState`, `VehicleSnapshot`, `DisabledReason` | UI·서비스가 구독하는 상태. |
+| `LearningController` | 학습 세션 상태 기계. 학습 ON/OFF, 콘텐츠·언어 선택, 차량 이벤트 처리, Play 판정(`PlayDecision`), 재생 티켓 발급·검증, 재생 경과 처리, 진도 저장(`Mutex`로 직렬화)을 맡는다. `StopGate`가 `ARMED`가 되면 `tryAutoPlay()`로 자동 재생을 요청한다. 정차 한 번에 단어 하나만 재생하고, 단어가 끝나면 세션 커서(`sessionChapterIndex`)만 다음 단어로 옮긴다. 마지막 단어 뒤에는 첫 단어로 돌아간다. 사용자가 멈춘(`USER_PAUSE`) 뒤에는 다음 정차에서도 자동 재생하지 않고 **듣기**를 기다린다. `restore()`는 `initiallyCompleted` 콘텐츠를 완료로 덧씌우고, 예전 단일 콘텐츠 진도를 언어별 선택으로 옮겨 저장한다(`migrateLearningSelections`). |
+| `LearningState`, `VehicleSnapshot`, `DisabledReason` | UI·서비스가 구독하는 상태. 언어 선택(`hasExistingLearning`, `enrolledLanguageIds`, `selectedLanguageId`, `activeContentIdsByLanguage`)과 `canResumeAtUsedStop`을 포함한다. |
 | `PlaybackPhase`, `PlaybackEnd`(`PauseReason`) | 재생 단계(`IDLE`/`PREPARING`/`PLAYING`)와 종료·중단 사유. |
 | `PlayerControl` | 컨트롤러 → 플레이어 경계(`pause`, `canStartAutomatically`, `startAutomatically`). |
 | `PlayTicket` | 재생 허가 표. 준비 중에 상황이 바뀌면 무효가 된다. |
 | `PlayDecision`, `IgnoreReason`, `StartResult`, `PlaybackReport` | 판정·결과·보고 타입(sealed). |
+
+파일: `LearningController.kt`, `LearningTypes.kt`(나머지 타입 전부).
 
 ### `domain.session`
 
@@ -61,6 +65,8 @@
 | `AudioStatus` | 음원 확인 상태(`Checking` / `Checked(missing)` / `Unavailable`). |
 | `StartOutcome` | 화면 '학습 시작' 결과. |
 | `PlayerControlRelay` (internal) | 컨트롤러의 정지·자동 재생 요청을 지금 살아 있는 서비스 플레이어로 넘긴다. 플레이어가 없으면 로그만 남긴다. |
+
+파일: `AppSession.kt`, `SessionTypes.kt`(`SessionState`·`AudioStatus`·`StartOutcome`).
 
 ### `domain.playback`
 
@@ -75,7 +81,7 @@
 | 인터페이스 | 기능 |
 |---|---|
 | `CatalogRepository` | `load(): CatalogResult` (`Success` / `Failure`). |
-| `ProgressRepository` | 진도 읽기·완료 기록·초기화·완료 콘텐츠 재시작(원자적)·활성 콘텐츠 저장. |
+| `ProgressRepository` | 진도 읽기·완료 기록·초기화·완료 콘텐츠 재시작(원자적)·활성 콘텐츠 저장. `saveLearningSelection(languageId, contentId)`은 언어 등록·선택과 활성 콘텐츠를 한 번에 저장하고, `migrateLearningSelections(...)`는 예전 진도를 언어별 학습 정보로 옮긴다(둘 다 기본 구현이 있음). |
 
 ### `domain.source`
 
@@ -124,7 +130,7 @@
 |---|---|
 | `CatalogRepositoryImpl` | `CatalogRepository` 구현. |
 | `CatalogLocalDataSource` | assets `content/catalog.json` 읽기. |
-| `CatalogParser` | schemaVersion 2 파싱·검증. 예외 대신 `CatalogResult.Failure`를 돌려준다. |
+| `CatalogParser` | schemaVersion 2 파싱·검증. `languageId`(선택, 기본 `en`, 지원 `en`·`ja`)와 `initiallyCompleted`(선택, 불리언)도 읽는다. 예외 대신 `CatalogResult.Failure`를 돌려준다. |
 | `json.MiniJson` | 의존성 없는 최소 JSON 파서(순수 Kotlin, 최대 깊이 200). |
 
 ### `data.audio`
@@ -141,7 +147,7 @@
 
 | 클래스 | 기능 |
 |---|---|
-| `ProgressRepositoryImpl` | DataStore Preferences(`learning_progress`) 기반 진도 저장. 키 `completed.<contentId>`, `activeContentId`. |
+| `ProgressRepositoryImpl` | DataStore Preferences(`learning_progress`) 기반 진도·학습 언어 저장. 키 `completed.<contentId>`, `activeContentId`, `enrolledLanguageIds`(문자열 집합), `selectedLanguageId`, `activeLanguage.<languageId>`. |
 
 ### `data.log`, `data.time`
 
@@ -176,19 +182,20 @@
 | 클래스 | 기능 |
 |---|---|
 | `LearningScreen` | 화면 진입 Composable. ViewModel 상태 구독, 권한 읽기·요청, `ON_RESUME` 권한 재확인, 일회성 이벤트 처리. |
-| `LearningContent` | 화면 본문(이어 하기 카드 + '다른 콘텐츠 고르기' 목록). 그리기만 한다. debug에서는 상태 카드와 `DebugPanel`도 그린다. |
-| `LearningViewModel` | `@HiltViewModel`. `LearningAction`을 받아 UseCase를 부르고 `StateFlow<LearningUiState>`와 `Flow<LearningEvent>`를 내보낸다. 권한 자동 요청은 처음 한 번만. |
-| `LearningAction` | 사용자 의도(sealed): 시작·종료·콘텐츠 선택·듣기·화면 열기·권한 응답·화면 복귀. |
+| `LearningContent` | 화면 본문. 그리기만 한다. 학습 OFF에서는 `LearningPane`에 따라 홈·언어 선택(`LanguagePage`) → 커리큘럼(`CurriculumPage`) → 학습 준비(`ReadyPage`)를, 학습 ON에서는 단어 재생 화면(`PlaybackPage`)을 그린다. 정차가 아니면(속도 0.5km/h 초과, 학습 중 신호 오류) '주행 중'만 보이고 조작을 잠근다. 상단 **이전** 버튼과 시스템 뒤로 가기는 `GoBack`으로 보낸다. debug에서는 정차·학습 OFF일 때 아래로 스크롤해 `DebugPanel`을 볼 수 있다. |
+| `CurriculumCarousel`, `CurriculumCardModel`, `CurriculumCardStatus` | 가로로 미는 커리큘럼 카드 목록. 화면 가운데와의 거리에 따라 카드가 1.00~1.06배로 커지고 파란색으로 강조된다. 카드 상태는 `COMPLETED`/`CURRENT`/`UPCOMING`/`UNRELEASED`(미공개). |
+| `LearningViewModel` | `@HiltViewModel`. `LearningAction`을 받아 UseCase를 부르고 `StateFlow<LearningUiState>`와 `Flow<LearningEvent>`를 내보낸다. 화면 이동 기록(`navigationHistory`)을 두고 이전 화면으로 돌아간다. 권한 자동 요청은 처음 한 번만. |
+| `LearningAction` | 사용자 의도(sealed): 기존 학습 열기(`OpenExistingLearning`)·언어 추가(`ClickAddLanguage`)·언어 선택(`SelectLanguage`)·커리큘럼 열기(`OpenCurriculum`)·이전(`GoBack`)·홈으로(`BackToHome`), 시작·종료·콘텐츠 선택·듣기·화면 열기·권한 응답·화면 복귀. |
 | `LearningEvent` | 일회성 효과(sealed): 권한 요청, 듣기 명령 전송. |
-| `LearningUiState`, `PermissionUiModel` | 화면 상태(data class). |
-| `LearningCard` | 화면에 무엇을 보일지(문구·아이콘·버튼 활성) 정하는 순수 표시 모델(`LearningCard.of(state)`). |
-| `ListenButton`, `ListenCommand` | '듣기/멈춤' 버튼 표시와 보낼 명령. 재생 허가는 하지 않는다. |
+| `LearningUiState`, `LearningPane`, `PermissionUiModel` | 화면 상태(data class). `LearningPane`은 학습 OFF일 때의 화면(`HOME`/`LANGUAGE_PICKER`/`CURRICULUM`/`READY`). |
+| `LearningCard` | 상태 줄 문구·아이콘·버튼 활성을 정하는 순수 표시 모델(`LearningCard.of(state)`). 지금 화면(`LearningContent`)은 쓰지 않고 테스트(`LearningCardTest`)만 쓴다. |
+| `ListenButton`, `ListenCommand` | '듣기/멈춤' 버튼 표시와 보낼 명령. 정차 확정(`ARMED`)이거나, 사용자가 멈춘 뒤 같은 정차가 이어질 때(`canResumeAtUsedStop`) '듣기'가 켜진다. 재생 허가는 하지 않는다. |
 
 ### `presentation.playback`
 
 | 클래스 | 기능 |
 |---|---|
-| `VocaPlaybackService` | Media3 `MediaLibraryService`. ExoPlayer와 `GatedPlayer`, `MediaLibrarySession`을 만든다. 미디어 키(`onMediaButtonEvent`), 브라우즈 트리·검색, 재생 재개 요청을 처리한다. 수명: `onCreate` 때 `startService(self)`, `onTaskRemoved`에서 정지 → `stopSelf()`. |
+| `VocaPlaybackService` | Media3 `MediaLibraryService`. ExoPlayer와 `GatedPlayer`, `MediaLibrarySession`을 만든다. 미디어 키(`onMediaButtonEvent`), 브라우즈 트리·검색, 재생 재개 요청을 처리한다. 수명: `onCreate` 때 `startService(self)`. `onTaskRemoved`에서 학습 ON이면 서비스를 유지해 화면을 닫아도 다음 정차를 기다리고, 학습 OFF일 때만 정지 → `stopSelf()`. `onDestroy`는 학습을 끄지 않는다. |
 | `GatedPlayer` | `SimpleBasePlayer`. MediaSession에 노출하는 유일한 플레이어로, 실제 ExoPlayer를 감추고 모든 Play 명령을 출처 분류 → UseCase 판정에 통과시킨다. 플레이리스트는 항상 "현재 챕터 1개". `PlayerControl`도 구현해 세션의 정지·자동 재생 요청을 받는다. |
 | `GatedPlayerUseCases`, `PlaybackServiceUseCases` | 플레이어·서비스가 쓰는 UseCase 묶음(`@Inject` 생성자). |
 | `PlaySourceClassifier` | 컨트롤러 패키지 이름·연결 힌트로 `PlaySource`를 가려낸다(순수). |
@@ -225,5 +232,5 @@
 | `DataModule` | main | data 구현을 domain 인터페이스로 묶음(`CatalogRepository`, `ProgressRepository`, `ChapterAudioSource`). 실제 차량 소스 팩토리는 `@RealVehicleSource`로만 제공. |
 | `UseCaseModule` | main | domain UseCase 생성(범위 없음). |
 | `RealVehicleSource` | main | 실제 차량 소스 팩토리 한정자(di 안에서만). |
-| `plantLogTree()` | main | Timber에 `VocaLogTree`를 심는다. |
+| `plantLogTree()` | main | Timber에 `VocaLogTree`를 심는다(`di/Logging.kt`). |
 | `VariantModule` | debug / release | 앱이 쓰는 `VehicleStateSourceFactory`를 제공. debug는 시뮬레이션 전환을 끼우고 `DebugVehicle`·`VehicleSimulator`도 제공. |

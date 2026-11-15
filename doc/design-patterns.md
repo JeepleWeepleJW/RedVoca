@@ -28,6 +28,7 @@
 |---|---|
 | `domain.gate.StopGate` | `GatePhase` 8개: 주행 확인 → 감지 → 정차 확인 → 확정/서행 → 사용 |
 | `domain.learning.LearningController` | 학습 ON/OFF × `PlaybackPhase`(`IDLE`/`PREPARING`/`PLAYING`) × 차단 신호 |
+| `presentation.learning.LearningViewModel` | 학습 OFF 화면 `LearningPane`(`HOME`/`LANGUAGE_PICKER`/`CURRICULUM`/`READY`) + 이동 기록 스택 |
 | `data.vehicle.GearLinkMonitor` | `UNKNOWN`/`HEALTHY`/`FAILED`/`BLOCKED` 기어 연결 상태 |
 
 전이는 한 스레드(메인)에서만 일어나 락이 필요 없고, 상태 변화는 `StateFlow`나 콜백(`onPhaseChanged`)으로 알린다.
@@ -110,13 +111,15 @@ Android·SDK 콜백을 받는 클래스는 얇게 두고, 판단은 순수 Kotli
 | `PleosGearDataSource` | `GearLinkMonitor`, `VehicleMapping.kt`의 `mapGearName`·`classifyPleosFailure`·`isPleosConnectionError` |
 | `CarSpeedDataSource` | `VehicleMapping.kt`의 `mapSpeedStatus`, `metersPerSecondToKmh` |
 | `GatedPlayer` | `PlaybackRules`, `PlaySourceClassifier`, `MediaIds` |
-| `LearningContent`(Compose) | `LearningCard.of(state)`, `ListenButton.of(...)` |
+| `LearningContent`(Compose) | `ListenButton.of(...)` |
+| `CurriculumCarousel`(Compose) | `curriculumCardScale`(가운데와의 거리 → 카드 배율) |
 | `AppMediaController` | `AppMediaController.dispatch` |
 | `AssetChapterAudioSource` | `WavCodec`, `ChapterAudioAssembler`, `ChapterAudioCacheKey`, `AudioAssetPaths` |
 
 ### 4.2 Presentation Model (표시 모델)
 
-- `LearningCard`, `ListenButton`은 `LearningState` → 화면 문구·아이콘·버튼 활성을 정하는 순수 data class다. Composable은 그리기만 한다.
+- `ListenButton`은 `LearningState` → '듣기/멈춤' 문구·명령을 정하는 순수 data class다. Composable은 그리기만 한다.
+- `LearningCard`(상태 줄 표시 모델)도 같은 형태지만, 지금 화면은 쓰지 않고 테스트만 남아 있다.
 - 재생 허가는 표시 모델이 하지 않고 domain 관문이 한다(버튼 비활성은 안내일 뿐).
 
 ## 5. DI 패턴 (Hilt)

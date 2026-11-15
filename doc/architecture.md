@@ -112,6 +112,7 @@ flowchart TB
 - **프로세스 단위 세션 하나**: `AppSession`(Hilt `@Singleton`)이 `LearningController`를 하나 갖고, 화면(ViewModel)과 미디어 서비스(`VocaPlaybackService`, `GatedPlayer`)가 UseCase를 거쳐 같은 인스턴스를 공유한다.
 - **메인 스레드 단일화**: `@ApplicationScope` 스코프 = `SupervisorJob() + Dispatchers.Main.immediate`. `AppSession`·`LearningController`·`StopGate`의 공개 메서드와 타이머 콜백은 모두 메인 스레드에서 실행되어 락 없이 상태를 다룬다.
 - **비동기 예외**: 진도 저장은 `scope.launch` + `Mutex`로 호출 순서대로 직렬화하고, 음원 병합은 `Dispatchers.IO`에서 한다.
+- **서비스 수명**: 학습 ON 동안에는 화면(태스크)을 닫아도 `VocaPlaybackService`가 남아 다음 정차를 기다린다(`onTaskRemoved`에서 학습 ON이면 정지하지 않음). 학습 OFF일 때만 재생을 멈추고 `stopSelf()`한다.
 - **시간**: 연속 시간 판정은 이벤트 개수가 아니라 `MonotonicClock`(앱: `SystemClock.elapsedRealtime()`)과 `Scheduler`(앱: `CoroutineScheduler`)로 잰다. 테스트는 `TestScope` 가상 시간으로 바꾼다.
 
 ## 5. 주요 실행 흐름
@@ -133,7 +134,7 @@ sequenceDiagram
     alt 실패
         S-->>S: SessionState.Failed
     else 성공
-        S->>LC: 생성 + restore() (진도 복원, 학습 OFF)
+        S->>LC: 생성 + restore() (진도·언어 선택 복원, 학습 OFF)
         S-->>S: SessionState.Ready
         S->>V: factory.create().events().collect → LC.onVehicleEvent
         S->>A: checkAvailability() → AudioStatus
@@ -141,6 +142,8 @@ sequenceDiagram
 ```
 
 앱 시작·서비스 연결만으로는 학습이 켜지지도, 재생되지도 않는다.
+
+`restore()`는 `catalog.json`에서 `initiallyCompleted: true`인 콘텐츠(데모용 Day1)를 완료로 덧씌운다. 예전 버전이 저장한 단일 콘텐츠 진도만 있으면 언어별 선택(`enrolledLanguageIds`, `selectedLanguageId`, `activeLanguage.<id>`)으로 옮겨 다시 저장한다.
 
 ### 5.2 정차 판정 (`StopGate`)
 
@@ -153,7 +156,7 @@ sequenceDiagram
 | `STOP_CONFIRMING` | D단·0.5km/h 이하 연속 시간 측정 중 |
 | `ARMED` | 정차 확정, 재생 가능 |
 | `ARMED_CREEP` | 정차 확정 후 서행(0.5~3km/h), 새 재생 금지 |
-| `USED` | 이번 정차의 재생 시도를 씀. 다시 주행해야 다음 정차 |
+| `USED` | 이번 정차의 재생 시도를 씀. 다시 주행해야 다음 정차. 사용자가 멈춘 단어는 같은 정차가 이어지는 동안(`canResumeAtUsedStop`) **듣기**로만 다시 재생할 수 있다 |
 
 ```mermaid
 stateDiagram-v2
@@ -211,7 +214,9 @@ sequenceDiagram
 ```
 
 - **즉시 정지**: 속도 > 3km/h, 기어 D 이탈, 차량 신호 오류가 오면 `LearningController.haltPlayback()` → `PlayerControl.pause()` → `GatedPlayer`가 ExoPlayer를 멈춘다.
+- **정차당 1단어**: 단어 하나가 끝나면 같은 정차가 이어져도 다음 단어를 재생하지 않는다. 세션 커서만 다음 단어로 옮기고, 다시 주행했다가 정차하면 그 단어를 재생한다. 마지막 단어 뒤에는 같은 콘텐츠의 첫 단어로 돌아간다.
 - **완료 판정**: `Player.STATE_ENDED`가 현재 티켓의 아이템에서 났을 때만 완료로 저장한다. 중단된 턴은 진도가 바뀌지 않아 다음 정차에서 처음부터 다시 재생한다.
+- **사용자 멈춤**: **멈춤**(`USER_PAUSE`) 뒤에는 다음 정차에서도 자동 재생하지 않는다. **듣기**를 누르면 멈춘 단어부터 다시 재생한다.
 - **오디오 포커스**: ExoPlayer `handleAudioFocus = true`(`USAGE_MEDIA`). 포커스를 잃으면 `PlaybackRules`에 따라 정지하고 자동 재개하지 않는다.
 - **서비스 연결 유지**: 학습 ON 동안 `LearningServiceConnection`이 `MediaController`로 서비스에 바인딩해 두어, 정차 시 `GatedPlayer`가 붙어 있게 한다.
 
@@ -225,6 +230,18 @@ flowchart LR
     VM -- StateFlow&lt;LearningUiState&gt; --> Screen
     VM -- Channel&lt;LearningEvent&gt; 일회성 --> Screen
     Screen -- SendListenCommand --> AMC[AppMediaController] --> SVC[VocaPlaybackService]
+```
+
+학습 OFF 화면은 `LearningUiState.pane`(`HOME` → `LANGUAGE_PICKER` → `CURRICULUM` → `READY`)으로 바뀌고, `LearningViewModel`이 이동 기록을 두어 **이전**·뒤로 가기에서 바로 앞 화면으로 돌아간다. 학습 ON이면 `pane`과 관계없이 단어 재생 화면을 그리고, 정차가 아니면 '주행 중'만 보인다.
+
+```mermaid
+flowchart LR
+    HOME[홈: 기존 학습 / 새 언어] -- ClickAddLanguage --> PICK[언어 선택]
+    HOME -- OpenExistingLearning --> CUR[커리큘럼 CurriculumCarousel]
+    PICK -- SelectLanguage --> CUR
+    CUR -- SelectContent --> READY[학습 준비]
+    READY -- ClickStart --> PLAY[학습 화면 learningOn]
+    PLAY -- ClickStop --> CUR
 ```
 
 화면 '듣기' 버튼도 앱 내부 `MediaController`(`AppMediaController`)로 세션에 명령을 보내므로 미디어 키와 같은 관문을 거친다. 앱이 플레이어 `play()`를 직접 부르는 경로는 없다.
@@ -249,8 +266,8 @@ adb shell am broadcast -a com.stai.pleos_red_light_voca_app.debug.VEHICLE --ef s
 
 | 소스셋 | 대상 |
 |---|---|
-| `test` | 계층 규칙(`LayerDependencyTest`, `CoreBoundaryTest`), domain 상태 기계(`StopGateTest`, `LearningControllerTest`), UseCase(`HandlePlayCommandUseCaseTest`), data 순수 로직(`WavCodecTest`, `MiniJsonTest`, `CatalogParserTest`, `GearLinkMonitorTest`, `VehicleMappingTest`, `AssetChapterAudioSourceTest`, `ProgressRepositoryImplTest`), presentation 순수 로직(`LearningCardTest`, `ListenButtonTest`, `PlaybackRulesTest`, `MediaIdsTest`, `PlaySourcePolicyTest`, `LearningViewModelTest`) |
+| `test` | 계층 규칙(`LayerDependencyTest`, `CoreBoundaryTest`), domain 상태 기계(`StopGateTest`, `LearningControllerTest`), UseCase(`HandlePlayCommandUseCaseTest`), data 순수 로직(`WavCodecTest`, `MiniJsonTest`, `CatalogParserTest`, `GearLinkMonitorTest`, `VehicleMappingTest`, `AssetChapterAudioSourceTest`, `ProgressRepositoryImplTest`), domain 순수 규칙(`PlaySourcePolicyTest`, `ChapterScriptTest`), presentation 순수 로직(`LearningCardTest`, `ListenButtonTest`, `CurriculumCarouselTest`, `PlaybackRulesTest`, `MediaIdsTest`, `PlaySourcePolicyTest`, `LearningViewModelTest`) |
 | `testDebug` | `FakeVehicleStateSourceTest` |
-| `androidTest` | 기본 예제만 |
+| `androidTest` | `CurriculumCarouselMotionTest`(커리큘럼 카드 확대·강조 동작), 기본 예제 |
 
 Android 의존 코드는 얇게 두고 판단 로직은 순수 Kotlin으로 빼서 JVM 단위 테스트로 고정한다([design-patterns.md](design-patterns.md)의 Humble Object 참고).

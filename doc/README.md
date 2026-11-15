@@ -1,6 +1,6 @@
 # 레드보카(RedVoca) 개발 문서
 
-레드보카 Android 앱(`:app` 모듈 하나)의 구조를 설명하는 문서 모음이다. 기획·리서치 문서는 `docs/`에 따로 있다.
+레드보카 Android 앱(`:app` 모듈 하나)의 구조를 설명하는 문서 모음이다. 기획·리서치 문서는 개인 문서라 저장소에 넣지 않는다(`.gitignore`의 `/docs/`). 저장소의 `docs/`에는 피칭·데모 영상(`docs/videos/`)만 있다.
 
 | 문서 | 내용 |
 |---|---|
@@ -11,7 +11,8 @@
 
 ## 한눈에 보기
 
-- **앱 성격**: Pleos Connect(AAOS) 차량용 미디어 앱. 정차가 확정될 때만 영단어 한 턴("영어 → 뜻 → 영어")을 재생한다.
+- **앱 성격**: Pleos Connect(AAOS) 차량용 미디어 앱. 정차가 확정될 때만 영단어 한 턴("영어 → 뜻 → 영어")을 재생하고, 정차 한 번에 단어 하나만 들려준다.
+- **학습 흐름**: 언어 선택 → 커리큘럼(가로 카드) → 학습 준비 → 학습. 진도와 언어 선택은 DataStore에 저장한다.
 - **언어·UI**: Kotlin, Jetpack Compose(Material 3, 다크 고정 테마)
 - **아키텍처**: `core` / `domain` / `data` / `presentation` / `di` 다섯 계층의 클린 아키텍처. 의존 방향은 단위 테스트(`LayerDependencyTest`)로 강제한다.
 - **핵심 도메인**: 정차 판정 상태 기계(`StopGate`) + 학습 세션 상태 기계(`LearningController`)
@@ -21,6 +22,6 @@
 
 ## 기준
 
-- 기준 코드: `feature/jiwun` 브랜치, 2026-11-14 작성
+- 기준 코드: `feature/jiwun` 브랜치 `c240a2f`, 2026-11-15 갱신(처음 작성 2026-11-14)
 - 패키지 루트: `com.stai.pleos_red_light_voca_app` (문서에서는 생략)
 - 코드가 바뀌면 이 문서도 함께 고친다. 특히 계층 규칙은 `app/src/test/.../LayerDependencyTest.kt`, `LayerScanner.kt`가 원본이다.

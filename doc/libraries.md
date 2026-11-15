@@ -11,6 +11,7 @@
 | KSP | 2.3.13 (Hilt 코드 생성) |
 | compileSdk / targetSdk / minSdk | 37 / 37 / 24 |
 | Java | 11 (`sourceCompatibility`, `targetCompatibility`) |
+| Gradle 데몬 JVM | 25 (`gradle/gradle-daemon-jvm.properties`의 `toolchainVersion`) |
 | 플랫폼 라이브러리 | `useLibrary("android.car")` (AAOS Car API, 매니페스트 `uses-library required=false`) |
 | 기기 요구 | `android.hardware.type.automotive` 필수 |
 | release 최적화 | `optimization { enable = true }` (`androidx.**`, `kotlin.**`, `kotlinx.**` 범위) |
@@ -54,7 +55,7 @@ Guava의 `ListenableFuture`·`Futures`·`ImmutableList`는 Media3가 함께 가�
 | kotlinx-coroutines-test | 1.11.0 | `TestScope`·가상 시간으로 `StopGate`·`LearningController` 시간 판정 테스트 |
 | AndroidX Test JUnit | 1.1.5 | 계측 테스트 |
 | Espresso Core | 3.5.1 | 계측 테스트 |
-| Compose UI Test JUnit4 / Manifest | BOM | 계측 테스트(현재 예제만) |
+| Compose UI Test JUnit4 / Manifest | BOM | 계측 테스트(`CurriculumCarouselMotionTest`) |
 | Compose UI Tooling | BOM | debug 미리보기 |
 
 ## 5. 플랫폼 권한 (라이브러리 사용에 필요)
