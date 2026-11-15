@@ -85,6 +85,28 @@ https://github.com/user-attachments/assets/c64eeda7-b5fa-4d93-9aaf-dc41dfae55e4
 
 음원 검사 결과와 단어별 재생 시작 기록은 `adb logcat -s VocaApp`에서 확인할 수 있습니다.
 
+## 개발에 사용한 에뮬레이터
+
+| 항목 | 값 |
+| --- | --- |
+| 에뮬레이터 | Pleos Connect v2.1.0 (42dot) |
+| 시스템 이미지 | Android 14 (API 34) Automotive, arm64-v8a |
+| 화면 | 2560 × 1440 px, 160dpi, 가로 |
+| 앱 표시 영역 | 1682 × 1210 dp (화면 오른쪽 창) |
+
+## APK 파일
+
+release APK는 [`apk/STAI_RedVoca_release.apk`](apk/STAI_RedVoca_release.apk)에 있습니다.
+
+에뮬레이터를 켜고 저장소 루트에서 설치하세요.
+
+```sh
+adb install -r -g apk/STAI_RedVoca_release.apk
+adb shell am start --user current -n com.stai.pleos_red_light_voca_app/.presentation.MainActivity
+```
+
+디버그 앱이 설치되어 있으면 서명 키가 달라 설치가 실패합니다. 이때는 `adb uninstall com.stai.pleos_red_light_voca_app`으로 먼저 지우세요.
+
 ## 개발 환경에서 빌드하기
 
 JDK 25, Android SDK Platform 37, Android SDK Platform Tools가 필요합니다.
